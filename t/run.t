@@ -552,7 +552,7 @@ sub {
 sub { ok( $? ) },
 sub { ok( map_fds, $fd_map ) },
 sub { ok( $out, ''  ) },
-sub { ok( $err =~ /Bad file/i ) },
+sub { ok( $err =~ /file descriptor/i ? "Bad file descriptor error" : $err, "Bad file descriptor error" ) },
 
 ##
 ## input redirection from a non-existent file

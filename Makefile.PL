@@ -25,19 +25,22 @@ sub pty_warn {
    last ;
 }
 
+my @conditional_prereqs;
+
 if ( $^O !~ /Win32/ ) {
-#   my $min = 0.9 ;
    for ( eval { require IO::Pty ; IO::Pty->VERSION } ) {
       s/_//g if defined ;
       pty_warn "IO::Pty not found", "will" unless defined ;
-#      pty_warn "IO::Pty version ($_) too old, must be > $min" if $_ < $min ;
+      push @conditional_prereqs, IO::Pty => 1.00;
    }
 }
 
 WriteMakefile(
     NAME          => 'IPC::Run',
-#    PMLIBDIRS    => [ 'Run' ],
-    VERSION_FROM  => 'Run.pm', # finds $VERSION
+    VERSION_FROM  => 'Run.pm',
+    PREREQ_PM => {
+        @conditional_prereqs,
+    }
 );
 
 

@@ -29,8 +29,8 @@ if ( $^O !~ /Win32/ ) {
       elsif ( $_ == 0.02 ) {
 	 pty_warn "IO::Pty v$_ has spurious warnings, try 0.9 or later", "may"
       }
-      else {
-	 pty_warn "IO::Pty is still evolving", "may" ;
+      elsif ( $_ < 1.00 ) {
+	 pty_warn "IO::Pty 1.00 is strongly recommended", "may" ;
       }
    }
 }

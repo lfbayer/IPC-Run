@@ -1,5 +1,10 @@
 Revision history for Perl extension IPC::Run
 
+0.64 Wed Mar 13 11:04:23 EST 2002
+   - Fix a test that fails on AIX because it uses a different message for
+     "Bad file descriptor".  Reported by "Dave Gomboc" <dave@cs.ualberta.ca>
+   - If IO::Pty is loadable, require IO::Pty 1.00 or later.
+
 0.63 Wed Feb 27 12:25:22 EST 2002
    - the select loop will now poll (with logarithmic fallback) when all
      I/O is closed but we have children running.  Problem report by
