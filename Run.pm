@@ -730,7 +730,7 @@ use Fcntl ;
 use POSIX () ;
 use Symbol ;
 
-$VERSION = '0.3' ;
+$VERSION = '0.32' ;
 
 @ISA = qw( Exporter ) ;
 

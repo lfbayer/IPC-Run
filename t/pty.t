@@ -15,10 +15,10 @@ use UNIVERSAL qw( isa ) ;
 
 my $echoer_script = <<TOHERE ;
 \$| = 1 ;
-\$s = select STDOUT ; \$| = 1 ; select \$s ;
+\$s = select STDERR ; \$| = 1 ; select \$s ;
 while (<>) {
-   print ;
    print STDERR uc \$_ ;
+   print ;
    last if /quit/ ;
 }
 TOHERE
@@ -45,6 +45,9 @@ sub map_fds() { &IPC::Run::_map_fds }
 
 ## TODO: test lots of mixtures of pty's and pipes & files.  Use run().
 
+## Older Perls can't ok( a, qr// ), so I manually do that here.
+my $exp ;
+
 my @tests = (
 ##
 ## stdin only
@@ -57,19 +60,25 @@ sub {
 
    $in  = "hello\n" ;
    $? = 0 ;
-   pump $h until $out =~ /hello/ ;
+   pump $h until $out =~ /hello/ && $err =~ /HELLO/ ;
    ok( $out, "hello\n" ) ;
 },
-sub { ok( $err =~ /^HELLO\n(?!\n)$/ ) },
+sub {
+   $exp = qr/^HELLO\n(?!\n)$/ ;
+   $err =~ $exp ? ok( 1 ) : ok( $err, $exp ) ;
+},
 sub { ok( $in, '' ) },
 
 sub {
    $in  = "world\n" ;
    $? = 0 ;
-   pump $h until $out =~ /world/ ;
-  ok( $out, "hello\nworld\n" ) ;
+   pump $h until $out =~ /world/ && $err =~ /WORLD/ ;
+   ok( $out, "hello\nworld\n" ) ;
 },
-sub { ok( $err =~ /^HELLO\nWORLD\n(?!\n)$/ ) },
+sub {
+   $exp = qr/^HELLO\nWORLD\n(?!\n)$/ ;
+   $err =~ $exp ? ok( 1 ) : ok( $err, $exp ) ;
+},
 sub { ok( $in, '' ) },
 
 sub {
@@ -91,7 +100,8 @@ sub {
    $? = 0 ;
    pump $h until $out =~ /hello/ ;
    ## We assume that the slave's write()s are atomic
-   ok( $out =~ /^(?:hello\r?\n){2}(?!\n)$/i ) ;
+   $exp = qr/^(?:hello\r?\n){2}(?!\n)$/i ;
+   $out =~ $exp ? ok( 1 ) : ok( $out, $exp ) ;
 },
 sub { ok( $in, '' ) },
 
@@ -99,7 +109,8 @@ sub {
    $in  = "world\n" ;
    $? = 0 ;
    pump $h until $out =~ /world/ ;
-   ok( $out =~ /^(?:hello\r?\n){2}(?:world\r?\n){2}(?!\n)$/i ) ;
+   $exp = qr/^(?:hello\r?\n){2}(?:world\r?\n){2}(?!\n)$/i ;
+   $out =~ $exp ? ok( 1 ) : ok( $out, $exp ) ;
 },
 sub { ok( $in, '' ) },
 
@@ -120,19 +131,27 @@ sub {
    $h = start \@echoer, \$in, '>pty>', \$out, '2>', \$err ;
    $in  = "hello\n" ;
    $? = 0 ;
-   pump $h until $out =~ /hello/ ;
-   ok( $out =~ /^hello\r?\n(?!\n)$/ ) ;
+   pump $h until $out =~ /hello/ && $err =~ /HELLO/ ;
+   $exp = qr/^hello\r?\n(?!\n)$/ ;
+   $out =~ $exp ? ok( 1 ) : ok( $out, $exp ) ;
 },
-sub { ok( $err =~ /^HELLO\n(?!\n)$/ ) },
+sub {
+   $exp = qr/^HELLO\n(?!\n)$/ ;
+   $err =~ $exp ? ok( 1 ) : ok( $err, $exp ) ;
+},
 sub { ok( $in, '' ) },
 
 sub {
    $in  = "world\n" ;
    $? = 0 ;
-   pump $h until $out =~ /world/ ;
-   ok( $out =~ /^hello\r?\nworld\r?\n(?!\n)$/ ) ;
+   pump $h until $out =~ /world/ && $err =~ /WORLD/ ;
+   $exp = qr/^hello\r?\nworld\r?\n(?!\n)$/ ;
+   $out =~ $exp ? ok( 1 ) : ok( $out, $exp ) ;
 },
-sub { ok( $err =~ /^HELLO\nWORLD\n(?!\n)$/ ) },
+sub {
+   $exp = qr/^HELLO\nWORLD\n(?!\n)$/ ,
+   $err =~ $exp ? ok( 1 ) : ok( $err, $exp ) ;
+},
 sub { ok( $in, '' ) },
 
 sub {
@@ -154,7 +173,8 @@ sub {
    $? = 0 ;
    pump $h until $out =~ /hello.*hello.*hello/is ;
    ## We assume that the slave's write()s are atomic
-   ok( $out =~ /^(?:hello\r?\n){3}(?!\n)$/i ) ;
+   $exp = qr/^(?:hello\r?\n){3}(?!\n)$/i ;
+   $out =~ $exp ? ok( 1 ) : ok( $out, $exp ) ;
 },
 sub { ok( $in, '' ) },
 
@@ -162,7 +182,8 @@ sub {
    $in  = "world\n" ;
    $? = 0 ;
    pump $h until $out =~ /world.*world.*world/is ;
-   ok( $out =~ /^(?:hello\r?\n){3}(?:world\r?\n){3}(?!\n)$/i ) ;
+   $exp = qr/^(?:hello\r?\n){3}(?:world\r?\n){3}(?!\n)$/i ;
+   $out =~ $exp ? ok( 1 ) : ok( $out, $exp ) ;
 },
 sub { ok( $in, '' ) },
 

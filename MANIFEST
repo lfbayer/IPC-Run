@@ -3,7 +3,6 @@ Changes
 MANIFEST
 MANIFEST.SKIP
 Run.pm
-Run/Pty.pm
 eg/factorial
 eg/factorial_pipe
 eg/factorial_scalar

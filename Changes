@@ -1,5 +1,13 @@
 Revision history for Perl extension IPC::Bashem.
 
+0.31 Tue Jun  6 01:54:59 EDT 2000
+   - t/pty.t should now report what was received when checking it against
+     a regex.  This is because 0.3's failing a few tests on ppc-linux
+     and the ok( $out =~ /.../ ) ; wasn't giving me enough info.  I chose
+     the 1 arg form due to older perl dists' Test.pm not grokking
+     ok( $out, qr// ) ;.  I should really do this to t/*.t, but I'm tired.
+   - Removed the misfired Run/Pty.pm from the dist.
+
 0.3  Sat Jun  3 08:33:17 EDT 2000
    - Changed spelling of '<|<' and '>|>' to '<pipe' and '>pipe'.  This
      is to make it less confusing (I hope), since '>|' is a valid construct
