@@ -22,7 +22,8 @@ sub pty_warn {
 if ( $^O !~ /Win32/ ) {
 #   my $min = 0.9 ;
    for ( eval { require IO::Pty ; IO::Pty->VERSION } ) {
-      unless ( defined ) {
+      s/_//g if defined ;
+      if ( ! defined ) {
 	 pty_warn "IO::Pty not found", "will" ;
       }
       elsif ( $_ == 0.02 ) {

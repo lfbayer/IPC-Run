@@ -32,6 +32,7 @@ use Carp ;
 use IO::Handle ;
 #use IPC::Open3 ();
 use Socket ;
+require POSIX ;
 
 ## Work around missing prototypes in old Socket.pm versions
 sub Socket::IPPROTO_TCP() ;
@@ -64,9 +65,21 @@ BEGIN {
 }
 
 
+## We need to prototype these so they don't conflict.
 sub _debug ;
-*_debug = \&IPC::Run::_debug ;
-*_debugging_details = \&IPC::Run::_debugging_details ;
+sub _debugging_details() ;
+sub _debugging_gory_details() ;
+
+## Sometimes, Win32Helper.pm is loaded first (in the pumpers), and it
+## loads IPC::Run.  We need to forward declare these to prevent warnings
+## in that case.
+
+sub IPC::Run::_debugging_details() ;
+sub IPC::Run::_debugging_gory_details() ;
+
+*_debug                  = \&IPC::Run::_debug ;
+*_debugging_details      = \&IPC::Run::_debugging_details ;
+*_debugging_gory_details = \&IPC::Run::_debugging_gory_details ;
 
 ## Takes an fd or a GLOB ref, never never never a Win32 handle.
 sub _dont_inherit {
@@ -142,7 +155,7 @@ sub _pump {
       my $count = sysread STDIN, $buf, 10_000 ;
       last unless $count ;
       $total_count += $count ;
-      if ( _debugging 4 ) {
+      if ( _debugging_gory_details ) {
 	 my $msg = "'$buf'" ;
 	 substr( $msg, 100, -1 ) = '...' if length $msg > 100 ;
 	 $msg =~ s/\n/\\n/g ;
@@ -199,7 +212,7 @@ sub _spawn_pumper {
    my $process ;
    my $cmd_line = join( " ",
       qw(perl -MIPC::Run::Win32Helper -e _pump ),
-      $$, $^T, $IPC::Run::debug, qq{"$child_label"},
+      $$, $^T, IPC::Run::_debugging_level(), qq{"$child_label"},
       @opts
    ) ;
 
@@ -382,7 +395,7 @@ _debug "PUMP_PIPE_HANDLE = ", fileno $self->{PUMP_PIPE_HANDLE} ;
 {
 my $foo ;
 confess "PARENT_HANDLE no longer open"
-   unless POSIX::read $parent_fd, $foo, 0 ;
+   unless POSIX::read( $parent_fd, $foo, 0 ) ;
 }
 
    _debug "win32_fake_pipe = ( $parent_fd, $child_fd )" ;

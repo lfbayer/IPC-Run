@@ -948,7 +948,7 @@ in their exit codes.
 
 =cut
 
-$VERSION = 0.54 ;
+$VERSION=0.55 ;
 
 @ISA = qw( Exporter ) ;
 
@@ -979,7 +979,6 @@ my @API        = qw(
    'api'        => \@API,
 ) ;
 
-
 use strict ;
 use Exporter ;
 use Fcntl ;
@@ -987,6 +986,10 @@ use POSIX () ;
 use Symbol ;
 
 use constant Win32_MODE => $^O =~ /os2|Win32/i ;
+
+## Declare these first so Win32Helper can see the prototypes
+sub _debugging_details() ;
+sub _debugging_gory_details() ;
 
 BEGIN {
    if ( Win32_MODE ) {
@@ -1120,9 +1123,7 @@ my $recv_debug_desc_fd ;
 
 use vars qw( $cur_self ) ;
 
-sub _debugging_atleast($) {
-   my $min_level = shift || 1 ;
-
+sub _debugging_level() {
    my $level = 0 ;
 
    $level = $cur_self->{debug} || 0
@@ -1130,7 +1131,14 @@ sub _debugging_atleast($) {
 
    $level = $ENV{IPCRUNDEBUG}
       if ( $ENV{IPCRUNDEBUG} || 0 ) > $level ;
+   return $level ;
+}
 
+sub _debugging_atleast($) {
+   my $min_level = shift || 1 ;
+
+   my $level = _debugging_level ;
+   
    return $level >= $min_level ? $level : 0 ;
 }
 

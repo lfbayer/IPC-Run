@@ -1,5 +1,11 @@
 Revision history for Perl extension IPC::Run
 
+0.55 Sat Dec  1 17:15:02 EST 2001
+   - Fixups to Win32 code to get it compiling ok (added t/win32_compile.t
+     to ensure that Win32Helper.pm at least compiles Ok).
+   - Minor tweak to deal with "_" in $IO::Pty::VERSION, which is "0.92_04",
+     including quotes, in the current version.
+
 0.54 Fri Nov 30 11:46:05 EST 2001
    - Win32 SUPPORT!!!!!
    - Added support for env. var. IPCRUNDEBUG=1 (or 2, 3, 4) to make it
