@@ -144,9 +144,9 @@ how long it will take a timer to expire.
 
 =head1 SUBCLASSING
 
-This class uses the fields pragma, so you need to be aware of the contraints
-and strengths that this confers upon subclasses.
-See the L<base> and L<fields> pragmas for more information.
+INCOMPATIBLE CHANGE: Due to the awkwardness introduced by ripping
+pseudohashes out of Perl, this class I<no longer> uses the fields
+pragma.
 
 =head1 FUNCTIONS & METHODS
 
@@ -185,17 +185,6 @@ use vars qw( @EXPORT_OK %EXPORT_TAGS @ISA ) ;
 
 require IPC::Run ;
 use IPC::Run::Debug ;
-
-use fields (
-   'INTERVAL',       # An array of the intervals
-   'STATE',          # The current state: 0 = reset, 1 = running, undef=expired
-                     # indicated expiration.
-   'EXCEPTION',      # Set for timouts, will die with each state.
-   'NAME',           # Name of this instance, undef if not set.
-   'START_TIME',     # Time the timer started.
-   'END_TIME',       # Time the timer will/did expire
-   'DEBUG',          # Whether or not to send debug messages.
-) ;
 
 ##
 ## Some helpers
@@ -312,18 +301,7 @@ sub new {
    my $class = shift ;
    $class = ref $class || $class ;
 
-   my IPC::Run::Timer $self ;
-   {
-      no strict 'refs' ;
-      # The internal implementation of use 'fields' objects has changed
-      # from pseudo hashes to restricted hashes in perl 5.9.0
-      if ($] < 5.009) {
-         $self = bless [ \%{"$class\::FIELDS"} ], $class ;
-      } else {
-         $self = bless {}, $class;
-         Hash::Util::lock_keys(%$self, keys %{"$class\::FIELDS"});
-      }
-   }
+   my IPC::Run::Timer $self = bless {}, $class;
 
    $self->{STATE} = 0 ;
    $self->{DEBUG} = 0 ;

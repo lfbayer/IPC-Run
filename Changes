@@ -1,5 +1,13 @@
 Revision history for Perl extension IPC::Run
 
+0.78 Tue Mar  9 01:49:25 EST 2004
+   - Removed all psuedohashes
+   - Require Win32::Process when on Win32 (<CORION a t cpan . org>)
+   - Retry the select() instead of croaking when EINTR occurs
+     (Ilya Martynov,  ilya a t iponweb.net)
+      - This needs further testing and analysis, but works for
+        the submitter.
+
 0.77 Fri Sep 26 15:36:56 EDT 2003
    - Non-binmoded pipes are now s/\r//g on Win32
    - Passes all tests on WinXPPro and WinNT
