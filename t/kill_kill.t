@@ -12,25 +12,34 @@ use Test ;
 
 use IPC::Run qw( start ) ;
 
+sub skip_unless_ignore_term(&) {
+   if ( IPC::Run::Win32_MODE() ) {
+      return sub {
+         skip "$^O does not support ignoring the TERM signal", 0 ;
+      } ;
+   }
+   shift ;
+}
+
 my @quiter = ( $^X, '-e', 'sleep while 1' ) ;
-my @zombie00 = ( $^X, '-e', '$SIG{TERM}=sub{};$|=1;print "Ok\n";sleep while 1');
+my @zombie00 = ( $^X, '-e', '$SIG{TERM}=sub{};$|=1;print "running\n";sleep while 1');
 
 my @tests = (
 sub {
    my $h = start \@quiter ;
-   my $needed_kill = $h->kill_kill( grace => 2 ) ;
+   my $needed_kill = $h->kill_kill ; # grace => 2 ) ;
    ok ! $needed_kill ;
 },
 
-sub {
+skip_unless_ignore_term {
    my $out ;
    my $h = start \@zombie00, \undef, \$out ;
-   pump $h until $out =~ /Ok/ ;
+   pump $h until $out =~ /running/ ;
    my $needed_kill = $h->kill_kill( grace => 1 ) ;
    ok $needed_kill ;
 },
 
-## not testing coredumps; some systems don't provide them.
+## not testing coredumps; some systems don't provide them. #'
 
 ) ;
 

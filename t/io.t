@@ -13,6 +13,15 @@ use Test ;
 use IPC::Run qw( :filters run io ) ;
 use UNIVERSAL qw( isa ) ;
 
+sub skip_unless_select (&) {
+   if ( IPC::Run::Win32_MODE() ) {
+      return sub {
+         skip "$^O does not allow select() on non-sockets", 0 ;
+      } ;
+   }
+   shift ;
+}
+
 my $text    = "Hello World\n" ;
 
 my $emitter_script = qq{print '$text' ; print STDERR uc( '$text' )} ;
@@ -34,8 +43,6 @@ my $r ;
 
 my $fd_map ;
 sub map_fds() { &IPC::Run::_map_fds }
-
-# $IPC::Run::debug = 2 ;
 
 ## TODO: Test filters, etc.
 
@@ -79,7 +86,7 @@ sub { ok( io( 'foo', '>>', \$recv  )->mode, 'ra' ) },
 ##
 ## Input from a file
 ##
-sub {
+skip_unless_select {
    spit $in_file, $text ;
    $recv = 'REPLACE ME' ;
    $fd_map = map_fds ;
@@ -87,15 +94,15 @@ sub {
    wipe $in_file ;
    ok( $r ) ;
 },
-sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+skip_unless_select { ok( ! $? ) },
+skip_unless_select { ok( map_fds, $fd_map ) },
 
-sub { ok( $recv, $text ) },
+skip_unless_select { ok( $recv, $text ) },
 
 ##
 ## Output to a file
 ##
-sub {
+skip_unless_select {
    wipe $out_file ;
    $send = $text ;
    $fd_map = map_fds ;
@@ -104,11 +111,11 @@ sub {
    wipe $out_file ;
    ok( $r ) ;
 },
-sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+skip_unless_select { ok( ! $? ) },
+skip_unless_select { ok( map_fds, $fd_map ) },
 
-sub { ok( $send, $text ) },
-sub { ok( $recv, $text ) },
+skip_unless_select { ok( $send, $text ) },
+skip_unless_select { ok( $recv, $text ) },
 ) ;
 
 plan tests => scalar @tests ;

@@ -1,5 +1,40 @@
 Revision history for Perl extension IPC::Run
 
+0.54 Fri Nov 30 11:46:05 EST 2001
+   - Win32 SUPPORT!!!!!
+   - Added support for env. var. IPCRUNDEBUG=1 (or 2, 3, 4) to make it
+     easier for users to debug the test suite.
+   - Adapt to IO::Pty 0.91, which creates slave fds in new(), forcing us to
+     close them in the parent after the fork().  We don't check for IO::Pty's
+     version number, perhaps we should (waiting for a response from Roland
+     Giersig <RGiersig@cpan.org> about what he intends, since this could affect
+     all users of older IO::Ptys that upgrade).
+   - Add a sleep(1) to allow the slave pty to be initted, otherwise a premature
+     write() to the slave's input can be lost.  This is a bogus hack, but
+     IO::Pty 0.9x should fix it when it's released.
+   - removed spurious use Errno qw( EAGAIN ), since this causes warnings with
+     perl5.00505.  Reported by  Christian Jaeger <christian.jaeger@sl.ethz.ch>
+     (pflanze).
+   - IPC::Run::start() now does a kill_kill() if called on an already started
+     harness.  This is needed on Win32 to pass the test suite, but it's also a
+     nice thing.
+   - The debug file descriptor is built by dup()ing STDERR in the parent and
+     passing it to the kids.  This keeps us from needing to worry about
+     debugging info in the select() loop and removes unnecessary complications.
+     Still needs a bit of work: it should be dup()ed in _open_pipes and it's
+     value should be stored in the harness, not a global.
+   - child processes are now a little more clearly identified in debug output.
+   - Some debugging messages are now clearer.
+   - debugging is now almost ready to be compile-time optimized away.
+   - "time since script start" is now shown when debugging.  We should check to
+     see if Time::HiRes is loaded and make this more accurate.
+   - pipe opens are now down in Run::IO::open_pipe().
+   - map_fds won't complain about no open fds unnecessarily (which was rare,
+     but still).
+   - the debug fd is now determined per-harness, not globally.  This requires a
+     bit of a hack (since I don't want to require $harness->_debug everywhere
+     _debug might be called), but it seems worthwhile.
+
 0.5 Sat Nov 10 21:32:58 EST 2001
    - confess() when undef passed to _exec()
    - Cleaned up some POD and code comments.

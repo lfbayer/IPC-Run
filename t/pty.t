@@ -13,6 +13,28 @@ use Test ;
 use IPC::Run qw( start pump finish ) ;
 use UNIVERSAL qw( isa ) ;
 
+select STDERR ; $| = 1 ; select STDOUT ;
+
+sub pty_warn {
+   warn "\nWARNING: $_[0].\nWARNING: '<pty<', '>pty>' $_[1] not work.\n\n";
+}
+
+if ( $^O !~ /Win32/ ) {
+#   my $min = 0.9 ;
+   for ( eval { require IO::Pty ; IO::Pty->VERSION } ) {
+      unless ( defined ) {
+	 pty_warn "IO::Pty not found", "will" ;
+      }
+      elsif ( $_ == 0.02 ) {
+	 pty_warn "IO::Pty v$_ has spurious warnings, try 0.9 or later", "may"
+      }
+      else {
+	 pty_warn "IO::Pty is still evolving", "may" ;
+      }
+   }
+}
+
+
 my $echoer_script = <<TOHERE ;
 \$| = 1 ;
 \$s = select STDERR ; \$| = 1 ; select \$s ;
@@ -40,8 +62,6 @@ my $fd_map ;
 my $text = "hello world\n" ;
 
 sub map_fds() { &IPC::Run::_map_fds }
-
-# $IPC::Run::debug = 2 ;
 
 ## TODO: test lots of mixtures of pty's and pipes & files.  Use run().
 

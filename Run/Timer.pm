@@ -200,7 +200,12 @@ use fields (
 ## some overly-friendly imports
 ##
 sub _debug ;
-*_debug = \&IPC::Run::_debug ;
+sub _debugging() ;
+sub _debugging_details() ;
+
+*_debug             = \&IPC::Run::_debug ;
+*_debugging         = \&IPC::Run::_debugging ;
+*_debugging_details = \&IPC::Run::_debugging_details ;
 
 ##
 ## Some helpers
@@ -347,7 +352,7 @@ sub new {
    }
 
    _debug $self->name . ' constructed'
-      if $self->{DEBUG} || $IPC::Run::debug > 2 ;
+      if $self->{DEBUG} || _debugging_details ;
 
    return $self ;
 }
@@ -388,7 +393,7 @@ sub check {
 
    _debug(
       "checking ", $self->name, " (end time ", $self->end_time, ") at ", $now 
-   ) if $self->{DEBUG} || $IPC::Run::debug > 2 ;
+   ) if $self->{DEBUG} || _debugging_details ;
 
    my $left = $self->end_time - $now ;
    return $left if $left > 0 ;
@@ -440,7 +445,7 @@ sub end_time {
    if ( @_ ) {
       $self->{END_TIME} = shift ;
       _debug $self->name, ' end_time set to ', $self->{END_TIME}
-	 if $self->{DEBUG} > 2 || $IPC::Run::debug > 2 ;
+	 if $self->{DEBUG} > 2 || _debugging_details ;
    }
    return $self->{END_TIME} ;
 }
@@ -464,7 +469,7 @@ sub exception {
    if ( @_ ) {
       $self->{EXCEPTION} = shift ;
       _debug $self->name, ' exception set to ', $self->{EXCEPTION}
-	 if $self->{DEBUG} || $IPC::Run::debug > 2 ;
+	 if $self->{DEBUG} || _debugging_details ;
    }
    return $self->{EXCEPTION} ;
 }
@@ -486,7 +491,7 @@ sub interval {
    if ( @_ ) {
       $self->{INTERVAL} = _parse_time( shift ) ;
       _debug $self->name, ' interval set to ', $self->{INTERVAL}
-	 if $self->{DEBUG} > 2 || $IPC::Run::debug > 2 ;
+	 if $self->{DEBUG} > 2 || _debugging_details ;
 
       $self->_calc_end_time if $self->state ;
    }
@@ -511,7 +516,7 @@ sub expire {
    my IPC::Run::Timer $self = shift ;
    if ( defined $self->state ) {
       _debug $self->name . ' expired'
-	 if $self->{DEBUG} || $IPC::Run::debug ;
+	 if $self->{DEBUG} || _debugging ;
 
       $self->state( undef ) ;
       croak $self->exception if $self->exception ;
@@ -584,7 +589,7 @@ sub reset {
    $self->state( 0 ) ;
    $self->end_time( undef ) ;
    _debug $self->name . ' reset'
-      if $self->{DEBUG} || $IPC::Run::debug ;
+      if $self->{DEBUG} || _debugging ;
 
    return undef ;
 }
@@ -642,7 +647,7 @@ sub start {
    _debug(
       $self->name, " started at ", $self->start_time,
       ", with interval ", $self->interval, ", end_time ", $self->end_time
-   ) if $self->{DEBUG} || $IPC::Run::debug ;
+   ) if $self->{DEBUG} || _debugging ;
    return undef ;
 }
 
@@ -660,7 +665,7 @@ sub start_time {
    if ( @_ ) {
       $self->{START_TIME} = _parse_time( shift ) ;
       _debug $self->name, ' start_time set to ', $self->{START_TIME}
-	 if $self->{DEBUG} > 2 || $IPC::Run::debug > 2 ;
+	 if $self->{DEBUG} > 2 || _debugging ;
    }
 
    return $self->{START_TIME} ;
@@ -687,7 +692,7 @@ sub state {
    if ( @_ ) {
       $self->{STATE} = shift ;
       _debug $self->name, ' state set to ', $self->{STATE}
-	 if $self->{DEBUG} > 2 || $IPC::Run::debug > 2 ;
+	 if $self->{DEBUG} > 2 || _debugging ;
    }
    return $self->{STATE} ;
 }

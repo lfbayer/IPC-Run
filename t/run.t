@@ -6,6 +6,11 @@ run.t - Test suite for IPC::Run::run, etc.
 
 =cut
 
+## Handy to have when our output is intermingled with debugging output sent
+## to the debugging fd.
+$| = 1 ;
+select STDERR ; $| = 1 ; select STDOUT ;
+
 use strict ;
 
 use Test ;
@@ -13,13 +18,47 @@ use Test ;
 use IPC::Run qw( :filters :filter_imp start run filter_tests ) ;
 use UNIVERSAL qw( isa ) ;
 
+sub Win32_MODE() ;
+*Win32_MODE = \&IPC::Run::Win32_MODE ;
+
+## Win32 does not support a lot of things that Unix does.  These
+## skip_unless subs help that.
+##
+## TODO: There are also a few things that Win32 supports (passing Win32 OS
+## handles) that we should test for, conversely.
+sub skip_unless_subs(&) {
+   if ( Win32_MODE ) {
+      return sub {
+         skip "Can't spawn subroutines on $^O", 0 ;
+      } ;
+   }
+   shift ;
+}
+
+sub skip_unless_shell(&) {
+   if ( Win32_MODE ) {
+      return sub {
+         skip "$^O's shell returns 0 even if last command doesn't", 0 ;
+      } ;
+   }
+   shift ;
+}
+
+sub skip_unless_high_fds(&) {
+   if ( Win32_MODE ) {
+      return sub {
+         skip "$^O does not allow redirection of file descriptors > 2", 0 ;
+      } ;
+   }
+   shift ;
+}
+
 my $text    = "Hello World\n" ;
 
-my $emitter_script = qq{print '$text' ; print STDERR uc( '$text' )} ;
-##
-## $^X is the path to the perl binary.  This is used run all the subprocesses.
-##
 my @perl    = ( $^X ) ;
+
+my $emitter_script =
+   qq{print '$text' ; print STDERR uc( '$text' ) unless \@ARGV } ;
 my @emitter = ( @perl, '-e', $emitter_script ) ;
 
 my $in ;
@@ -32,11 +71,9 @@ my $err_file = 'run.t.err' ;
 
 my $h ;
 
-my $fd_map ;
-
 sub map_fds() { &IPC::Run::_map_fds }
 
-# $IPC::Run::debug = 2 ;
+my $fd_map = map_fds ;
 
 sub slurp($) {
    my ( $f ) = @_ ;
@@ -90,6 +127,9 @@ my $r ;
 
 
 my @tests = (
+
+sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+
 ##
 ## Internal testing
 ##
@@ -100,6 +140,8 @@ filter_tests(
    \&alt_casing_filter
 ),
 
+sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+
 filter_tests(
    "case_inverting_filter",
    "Hello World",
@@ -107,47 +149,86 @@ filter_tests(
    \&case_inverting_filter
 ),
 
+sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+
 ##
-## Calling the local system's shell
+## Calling the local system shell
 ##
-sub { ok(   run qq{$^X -e exit}       ) },
-sub { ok( $?, 0 ) },
-sub { ok( ! run qq{$^X -e 'exit(42)'} ) },
-sub { ok( $? ) },
+sub { ok run qq{$^X -e exit} },
+sub { ok $?, 0 },
+
+sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+
+skip_unless_shell { ok ! run qq{$^X -e 'exit(42)'} },
+skip_unless_shell { ok $?                          },
+skip_unless_shell { ok $? >> 8, 42                 },
+
+sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
 
 ##
 ## Simple commands, not executed via shell
 ##
 sub { ok( run $^X, qw{-e exit}       ) },
 sub { ok( $?, 0 ) },
+
+sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+
 sub { ok( ! run $^X, qw{-e exit(42)} ) },
 sub { ok( $? ) },
+sub { ok $? >> 8, 42 },
+
+sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
 
 ##
 ## A function
 ##
-sub { ok( run sub{} ) },
-sub { ok( $?, 0 ) },
-sub { ok( ! run sub{ exit(42) } ) },
-sub { ok(   $? ) },
+skip_unless_subs { ok run sub{}           },
+skip_unless_subs { ok $?, 0               },
+skip_unless_subs { ok !run sub{ exit 42 } },
+skip_unless_subs { ok $?                  },
+skip_unless_subs { ok $? >> 8, 42         },
+
+sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
 
 ##
 ## A function, and an init function
 ##
-sub {
+skip_unless_subs {
    my $e = 0 ;
    ok(
       ! run(
-         sub{ exit($e) },
-         init => sub { $e = 42 }
+	 sub{ exit($e) },
+	 init => sub { $e = 42 }
       )
-   )
+   ) ;
 },
-sub { ok( $? ) },
+skip_unless_subs { ok( $? ) },
+
+sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
 
 ##
 ## scalar ref I & O redirection using op tokens
 ##
+sub {
+   $out = 'REPLACE ME' ;
+   $fd_map = map_fds ;
+   $r = run [ @emitter, "nostderr" ], '>', \$out ;
+   ok( $r ) ;
+},
+sub { ok( ! $? ) },
+sub { ok( map_fds, $fd_map ) },
+sub { ok( $out,        $text       ) },
+
+sub {
+   $out = 'REPLACE ME' ;
+   $fd_map = map_fds ;
+   $r = run [ @emitter, "nostderr" ], '<', \undef, '>', \$out ;
+   ok( $r ) ;
+},
+sub { ok( ! $? ) },
+sub { ok( map_fds, $fd_map ) },
+sub { ok( $out,        $text       ) },
+
 sub {
    $in = $emitter_script ;
    $out = 'REPLACE ME' ;
@@ -191,7 +272,7 @@ sub {
    $in = "-" x 20000 . "end\n" ;
    $out = 'REPLACE ME' ;
    $fd_map = map_fds ;
-   $r = run [ $^X, qw{-e print"-"x20000;<STDIN>} ], \$in, \$out ;
+   $r = run [ $^X, qw{-e print"-"x20000;<STDIN>;} ], \$in, \$out ;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
@@ -203,7 +284,7 @@ sub { ok( $out !~ /[^-]/ ) },
 ##
 ## child function, scalar ref I & O redirection, succinct mode.
 ##
-sub {
+skip_unless_subs {
    $in = $text ;
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
@@ -214,12 +295,12 @@ sub {
       ) ;
    ok( $r ) ;
 },
-sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+skip_unless_subs { ok ! $? },
+skip_unless_subs { ok( map_fds, $fd_map ) },
 
-sub { ok( $in,         $text       ) },
-sub { ok( $out,        $text       ) },
-sub { ok( $err,    uc( $text )     ) },
+skip_unless_subs { ok( $in,         $text       ) },
+skip_unless_subs { ok( $out,        $text       ) },
+skip_unless_subs { ok( $err,    uc( $text )     ) },
 
 ##
 ## here document as input
@@ -409,7 +490,7 @@ sub { ok( $err, uc( $text ) ) },
 ##
 ## reading input from a non standard fd
 ##
-sub {
+skip_unless_high_fds {
    $out = undef ;
    $err = undef ;
    $fd_map = map_fds ;
@@ -421,16 +502,16 @@ sub {
    ) ;
    ok( $r ) ;
 },
-sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+skip_unless_high_fds { ok( ! $? ) },
+skip_unless_high_fds { ok( map_fds, $fd_map ) },
 
-sub { ok( $out, $text ) },
-sub { ok( $err, '' ) },
+skip_unless_high_fds { ok( $out, $text ) },
+skip_unless_high_fds { ok( $err, '' ) },
 
 ##
 ## duping input descriptors and an input descriptor > 0
 ##
-sub {
+skip_unless_high_fds {
    $in  = $emitter_script ;
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
@@ -444,11 +525,11 @@ sub {
    ) ;
    ok( $r ) ;
 },
-sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
-sub { ok( $in,     $emitter_script ) },
-sub { ok( $out,     $text   ) },
-sub { ok( $err, uc( $text ) ) },
+skip_unless_high_fds { ok( ! $? ) },
+skip_unless_high_fds { ok( map_fds, $fd_map ) },
+skip_unless_high_fds { ok( $in,     $emitter_script ) },
+skip_unless_high_fds { ok( $out,     $text   ) },
+skip_unless_high_fds { ok( $err, uc( $text ) ) },
 
 ##
 ## closing input descriptors
@@ -480,13 +561,20 @@ sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
    $fd_map = map_fds ;
-   if ( -x $in_file ) {
-      unlink( $in_file ) or die "$! unlinking '$in_file'" ;
+   my $bad_file = "$in_file.nonexistant" ;
+   if ( -e $bad_file ) {
+      unlink $bad_file or die "$! unlinking '$bad_file'" ;
+      die "$bad_file still exists" if -e $bad_file ;
    }
    eval {
-      $r = run \@perl, ">$out_file", "<$in_file" ;
+      $r = run \@perl, ">$out_file", "<$bad_file" ;
    } ;
-   ok( $@ =~ /\Q$in_file\E/ ) ;
+   if ( $@ =~ /\Q$bad_file\E/ ) {
+      ok 1 ;
+   }
+   else {
+      ok $@, "qr/\Q$bad_file\E/" ;
+   }
 },
 sub { ok( map_fds, $fd_map ) },
 
@@ -563,7 +651,6 @@ sub { ok( map_fds, $fd_map ) },
 
 sub { ok( $out, "out: $text" ) },
 sub { ok( $err, uc( "err: $text" ) ) },
-
 ##
 ## dup()ing output descriptors
 ##
@@ -574,10 +661,10 @@ sub {
    $r = run \@emitter, '>', \$out, '2>', \$err, '2>&1' ;
    ok( $r ) ;
 },
-sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
-sub { ok( $out =~ /(?:$text){2}/i ) },
-sub { ok( $err, '' ) },
+sub  { ok( ! $? ) },
+sub  { ok( map_fds, $fd_map ) },
+sub  { $out =~ /(?:$text){2}/i ? ok 1 : ok $out, "qr/($text){2}/i" },
+sub  { ok( $err, '' ) },
 
 ##
 ## stderr & stdout redirection to the same file via >&word
@@ -624,7 +711,7 @@ sub { ok( map_fds, $fd_map ) },
 ## This test assumes that our caller doesn't leave a lot of fds opened,
 ## and assumes that $out_file will be opened on fd 3, 4 or 5.
 ##
-sub {
+skip_unless_high_fds {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
    if ( -x $out_file ) {
@@ -641,10 +728,10 @@ sub {
    unlink $out_file ;
    ok( $r ) ;
 },
-sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
-sub { ok( $out,     $text   ) },
-sub { ok( $err, uc( $text ) ) },
+skip_unless_high_fds { ok( ! $? ) },
+skip_unless_high_fds { ok( map_fds, $fd_map ) },
+skip_unless_high_fds { ok( $out,     $text   ) },
+skip_unless_high_fds { ok( $err, uc( $text ) ) },
 
 ##
 ## Pipelining
@@ -809,7 +896,7 @@ sub {
    $err = 'REPLACE ME' ;
    $fd_map = map_fds ;
    $h = start(
-      [ @perl, '-pe', 'BEGIN { $| = 1 } print STDERR uc($_)' ],
+      [ @perl, '-pe', 'binmode STDOUT ; binmode STDERR ; BEGIN { $| = 1 } print STDERR uc($_)' ],
 	 \$in, \$out, \$err,
    ) ;
    ok( isa( $h, 'IPC::Run' ) ) ;
@@ -889,7 +976,7 @@ sub {
    $fd_map = map_fds ;
    $in = $text ;
    $r = run(
-      [ @perl, '-pe', 'print STDERR uc $_' ],
+      [ @perl, '-pe', 'binmode STDOUT ; binmode STDERR ; print STDERR uc $_' ],
       '0<',
          \&case_inverting_filter,
 	 \&alt_casing_filter,

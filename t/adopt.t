@@ -30,8 +30,6 @@ my $fd_map1 ;
 
 sub map_fds() { &IPC::Run::_map_fds }
 
-$IPC::Run::debug = 3 ;
-
 my @tests = (
 ##
 ## harness, pump, run

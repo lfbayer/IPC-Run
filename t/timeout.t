@@ -21,8 +21,6 @@ my $in ;
 my $out ;
 my $started ;
 
-# $IPC::Run::debug = 2 ;
-
 my @tests = (
 
 sub {

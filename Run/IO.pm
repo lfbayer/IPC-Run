@@ -6,6 +6,10 @@ package IPC::Run::IO ;
 
 =head1 SYNOPSIS
 
+B<NOT IMPLEMENTED YET ON Win32! Win32 does not allow select() on
+normal file descriptors; IPC::RUN::IO needs to use IPC::Run::Win32Helper
+to do this.>
+
    use IPC::Run qw( io ) ;
 
    ## The sense of '>' and '<' is opposite of perl's open(),
@@ -76,6 +80,16 @@ use UNIVERSAL qw( isa ) ;
 
 require IPC::Run ;
 
+sub Win32_MODE() ;
+
+BEGIN {
+   *Win32_MODE = \&IPC::Run::Win32_MODE ;
+   if ( Win32_MODE ) {
+      eval "use IPC::Run::Win32Helper ; 1;"
+         or ( $@ && die ) or die "$!" ;
+   }
+}
+
 use fields (
     'TYPE',             # Directionality
     'DEST',             # Where to send data to when reading from HANDLE
@@ -90,7 +104,6 @@ use fields (
     'FBUFS',            # SCALAR refs to filter buffers, including I/O scalars
     'PAUSED',           # If the input side is paused.
     'SOURCE_EMPTY',     # No more data to send to file.
-    'IS_DEBUG',         # This is the debug pipe
     'PTY_ID',           # The nickname of the pty it HANDLE is a pty
     'DONT_CLOSE',       # Set if this is an externally opened handle, so
                         # we know better than to close it.
@@ -103,15 +116,21 @@ use fields (
     'HARNESS',          # Temporarily set to the IPC::Run instance that
                         # called us while we're doing filters.  Unset to
 			# prevent circrefs.
+    'FAKE_PIPE',        # Used to hold the "fake pipe" objects on Win32,
+                        # since Win32 requires a lot of extra monkey business.
 ) ;
+
+sub _empty($) ;
 
 ##
 ## some overly-friendly imports
 ##
-sub _empty($) ;
+sub _debug ;
+sub _debugging_data ();
 
-*_debug = \&IPC::Run::_debug ;
-*_empty = \&IPC::Run::_empty ;
+*_debug          = \&IPC::Run::_debug ;
+*_debugging_data = \&IPC::Run::_debugging_data ;
+*_empty          = \&IPC::Run::_empty ;
 
 
 sub new {
@@ -123,8 +142,8 @@ sub new {
    croak "$class: '$_' is not a valid I/O operator"
       unless $type =~ /^(?:<<?|>>?)$/ ;
 
-   my IPC::Run::IO $self = _new_internal(
-      $class, $type, undef, undef, $internal, @_
+   my IPC::Run::IO $self = $class->_new_internal(
+      $type, undef, undef, $internal, @_
    ) ;
 
    if ( ! ref $external ) {
@@ -163,14 +182,17 @@ sub _new_internal {
    $self->{PTY_ID}  = $pty_id ;
    $self->{FILTERS} = [ @filters ] ;
 
+   ## Add an adapter to the end of the filter chain (which is usually just the
+   ## read/writer sub pushed by IPC::Run) to the DEST or SOURCE, if need be.
    if ( $self->op =~ />/ ) {
       croak "'$_' missing a destination" if _empty $internal ;
       $self->{DEST} = $internal ;
       if ( isa( $self->{DEST}, 'CODE' ) ) {
 	 ## Put a filter on the end of the filter chain to pass the
 	 ## output on to the CODE ref.  For SCALAR refs, the last
-	 ## filter in the chain writes on the scalar itself.  See
-	 ## _init_filters().
+	 ## filter in the chain writes directly to the scalar itself.  See
+	 ## _init_filters().  For CODE refs, however, we need to adapt from
+	 ## the SCALAR to calling the CODE.
 	 unshift( 
 	    @{$self->{FILTERS}},
 	    sub {
@@ -308,9 +330,9 @@ sub open {
       unless defined $self->{FILENAME} ;
    $self->{HANDLE} = gensym unless $self->{HANDLE} ;
 
-   IPC::Run::_debug(
+   _debug
       "opening '", $self->filename, "' mode '", $self->mode, "'"
-   ) ;
+   if _debugging_data ;
    sysopen(
       $self->{HANDLE},
       $self->filename,
@@ -319,6 +341,49 @@ sub open {
 	 "IPC::Run::IO: $! opening '$self->{FILENAME}', mode '" . $self->mode . "'" ;
 
    return undef ;
+}
+
+
+=item open_pipe
+
+If this is a redirection IO object, this opens the pipe in a platform-independant
+manner.
+
+=cut
+
+sub open_pipe {
+   my IPC::Run::IO $self = shift ;
+   my ( $child_debug_fd, $parent_handle ) = @_ ;
+
+   ## Hmmm, Maybe allow named pipes one day.  But until then...
+   croak "IPC::Run::IO: Can't pipe() when a file name has been set"
+      if defined $self->{FILENAME} ;
+
+   my $dir = $self->dir ;
+
+   if ( Win32_MODE ) {
+      ( $self->{FAKE_PIPE}, $self->{FD}, $self->{TFD} ) =
+         win32_fake_pipe( $self->dir, $child_debug_fd, $parent_handle ) ;
+   }
+   else {
+      if ( $dir eq "<" ) {
+         ( $self->{TFD}, $self->{FD} ) = IPC::Run::_pipe_nb ;
+	 if ( $parent_handle ) {
+	    CORE::open $parent_handle, ">&=$self->{FD}"
+	       or croak "$! duping write end of pipe for caller" ;
+	 }
+      }
+      else {
+         ( $self->{FD}, $self->{TFD} ) = IPC::Run::_pipe ;
+	 if ( $parent_handle ) {
+	    CORE::open $parent_handle, "<&=$self->{FD}"
+	       or croak "$! duping read end of pipe for caller" ;
+	 }
+      }
+   }
+
+   return $dir eq "<" ? ( $self->{TFD}, $self->{FD} )
+                      : ( $self->{FD}, $self->{TFD} ) ;
 }
 
 
@@ -416,6 +481,21 @@ sub op {
 
    return $self->{TYPE} ;
 }
+
+=item dir
+
+Returns the first character of $self->op.  This is either "<" or ">".
+
+=cut
+
+sub dir {
+   my IPC::Run::IO $self = shift ;
+
+   croak "IPC::Run::IO: unexpected arguments for dir(): @_" if @_ ;
+
+   return substr $self->{TYPE}, 0, 1 ;
+}
+
 
 ##
 ## Filter Scaffolding

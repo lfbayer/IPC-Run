@@ -5,6 +5,7 @@ Makefile.PL
 Run.pm
 Run/IO.pm
 Run/Timer.pm
+Run/Win32Helper.pm
 abuse/blocking_debug_with_sub_coprocess
 abuse/blocking_writes
 abuse/broken_pipe_on_bad_executable_name
@@ -18,7 +19,6 @@ eg/runsu
 eg/synopsis_scripting
 t/adopt.t
 t/bogus.t
-t/debug.t
 t/filter.t
 t/harness.t
 t/io.t

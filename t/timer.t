@@ -17,8 +17,6 @@ use UNIVERSAL qw( isa ) ;
 my $t ;
 my $started ;
 
-# $IPC::Run::debug = 2 ;
-
 my @tests = (
 
 sub {
@@ -123,11 +121,13 @@ sub { ok( !  $t->is_running ) },
 sub { ok( !  $t->is_reset   ) },
 
 sub {
-   my $got = eval {
+   my $got ;
+   eval {
+      $got = "timeout fired" ;
       run [$^X, '-e', 'sleep 3'], timeout 1 ;
-      1 ;
+      $got = "timeout didn't fire" ;
    } ;
-   ok $got || 0, 0, "timer firing in run()" ;
+   ok $got, "timeout fired", "timer firing in run()" ;
 },
 
 ) ;
