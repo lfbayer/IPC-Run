@@ -1,5 +1,8 @@
 Revision history for Perl extension IPC::Run
 
+   - Improved Win32 PATH and PATHEXT search; original patch by Ron Savage
+     <ron@savage.net.au>
+
 0.72 Thu May  9 10:25:55 EDT 2002
    - Doc patch from daniel@danielgardner.org
    - Backport Win32Helper to 5.00503 (compilation of this is

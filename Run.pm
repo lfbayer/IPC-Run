@@ -1013,7 +1013,7 @@ in their exit codes.
 
 =cut
 
-$VERSION = 0.72 ;
+$VERSION = 0.73 ;
 
 @ISA = qw( Exporter ) ;
 
@@ -1188,7 +1188,7 @@ my %cmd_cache ;
 
 sub _search_path {
    my ( $cmd_name ) = @_ ;
-   if ( File::Spec->file_name_is_absolute( $cmd_name ) ) {
+   if ( File::Spec->file_name_is_absolute( $cmd_name ) && -x $cmd_name) {
       _debug "'", $cmd_name, "' is absolute"
          if _debugging_details ;
       return $cmd_name ;
@@ -1204,7 +1204,16 @@ sub _search_path {
       : '/'
       ) ;
 
-## TODO: Make this look for .exe, etc. on Win32.
+   if ( Win32_MODE
+      && ( $cmd_name =~ /$dirsep/ )
+      && ( $cmd_name !~ /\..+$/ )  ## Only run if cmd_name has no extension?
+    ) {
+      for ( split /;/, $ENV{PATHEXT} || ".COM;.BAT;.EXE" ) {
+         my $name = "$cmd_name$_";
+         $cmd_name = $name, last if -f $name && -x _;
+      }
+   }
+
    if ( $cmd_name =~ /($dirsep)/ ) {
       _debug "'$cmd_name' contains '$1'"  if _debugging;
       croak "file not found: $cmd_name"    unless -e $cmd_name ;
@@ -1236,16 +1245,11 @@ LOOP:
 
       my $prospect = File::Spec->catfile( $_, $cmd_name ) ;
       my @prospects ;
-      ## TODO: Use a better algorithm for finding executables on
-      ## non-Unix.  Maybe defer to system().
-      if ( Win32_MODE ) {
-         @prospects = -f $prospect
-            ? ( $prospect )
-            : ( $prospect, glob( "$prospect.*" ) )  ;
-      }
-      else {
-         @prospects = ( $prospect ) ;
-      }
+
+      @prospects =
+         ( Win32_MODE && ! ( -f $prospect && -x _ ) )
+            ? map "$prospect$_", split /;/, $ENV{PATHEXT} || ".COM;.BAT;.EXE"
+            : ( $prospect ) ;
 
       for my $found ( @prospects ) {
          if ( -f $found && -x _ ) {
@@ -3992,20 +3996,20 @@ These functions are for use from within filters.
 =item input_avail
 
 Returns TRUE if input is available.  If none is available, then 
-&get_more_input is called and it's result returned.
+&get_more_input is called and its result is returned.
 
 This is usually used in preference to &get_more_input so that the
 calling filter removes all data from the $in_ref before more data
 gets read in to $in_ref.
 
-C<get_more_input> is usually used as part of a return expression:
+C<input_avail> is usually used as part of a return expression:
 
    return input_avail && do {
       ## process the input just gotten
       1 ;
    } ;
 
-This technique allows get_more_input to return the undef or 0 that a
+This technique allows input_avail to return the undef or 0 that a
 filter normally returns when there's no input to process.  If a filter
 stores intermediate values, however, it will need to react to an
 undef:

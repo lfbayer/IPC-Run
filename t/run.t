@@ -22,6 +22,10 @@ sub run { IPC::Run::run( ref $_[0] ? ( noinherit => 1 ) : (), @_ ) }
 
 use UNIVERSAL qw( isa ) ;
 
+## Test at least some of the win32 PATHEXT logic
+my $perl = $^X;
+$perl =~ s/\.\w+\z// if Win32_MODE;
+
 ## Win32 does not support a lot of things that Unix does.  These
 ## skip_unless subs help that.
 ##
@@ -72,7 +76,7 @@ sub _unlink {
 
 my $text    = "Hello World\n" ;
 
-my @perl    = ( $^X ) ;
+my @perl    = ( $perl ) ;
 
 my $emitter_script =
    qq{print '$text' ; print STDERR uc( '$text' ) unless \@ARGV } ;
@@ -179,12 +183,12 @@ sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 ##
 ## Calling the local system shell
 ##
-sub { ok run qq{$^X -e exit} },
+sub { ok run qq{$perl -e exit} },
 sub { ok $?, 0 },
 
 sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 
-skip_unless_shell { ok ! run qq{$^X -e 'exit(42)'} },
+skip_unless_shell { ok ! run qq{$perl -e 'exit(42)'} },
 skip_unless_shell { ok $?                          },
 skip_unless_shell { ok $? >> 8, 42                 },
 
@@ -193,12 +197,12 @@ sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 ##
 ## Simple commands, not executed via shell
 ##
-sub { ok( run $^X, qw{-e exit}       ) },
+sub { ok( run $perl, qw{-e exit}       ) },
 sub { ok( $?, 0 ) },
 
 sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 
-sub { ok( ! run $^X, qw{-e exit(42)} ) },
+sub { ok( ! run $perl, qw{-e exit(42)} ) },
 sub { ok( $? ) },
 sub { ok $? >> 8, 42 },
 
@@ -295,7 +299,7 @@ sub {
    $in = "-" x 20000 . "end\n" ;
    $out = 'REPLACE ME' ;
    $fd_map = _map_fds ;
-   $r = run [ $^X, qw{-e print"-"x20000;<STDIN>;} ], \$in, \$out ;
+   $r = run [ $perl, qw{-e print"-"x20000;<STDIN>;} ], \$in, \$out ;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
