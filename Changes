@@ -1,4 +1,10 @@
-Revision history for Perl extension IPC::Bashem.
+Revision history for Perl extension IPC::Run
+
+0.4  Thu Jun 15 14:59:22 EDT 2000
+   - Added IPC::Run::IO and IPC::Run::Timer, bunches of tests.  IPC::Run
+     can now do more than just run child processes.
+   - Scribbled more documentation.  Needs a good edit.
+   - Fixed some minor bugs here and there.
 
 0.34 Thu Jun  8 06:39:23 EDT 2000
    - Fixed bug in t/pty.t that prevented it from noticing IO::Pty

@@ -1,0 +1,16 @@
+#!/usr/local/bin/perl -w
+
+use strict ;
+
+use IPC::Run qw( run close_terminal ) ;
+
+run(
+   sub {
+      # ... your code here ...
+      sleep 15 ;
+   },
+   init => sub {
+      close_terminal ;
+      exit if fork ;
+   }
+) ;

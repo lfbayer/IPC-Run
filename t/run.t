@@ -153,7 +153,7 @@ sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
    $fd_map = map_fds ;
-   $r = run \@perl, '<', \$in, '>', \$out, '2>', \$err ;
+   $r = run \@perl, '<', \$in, '>', \$out, '2>', \$err, ;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },

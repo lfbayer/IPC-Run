@@ -12,10 +12,11 @@ use strict ;
 
 use Test ;
 
-use IPC::Run qw( harness ) ;
+use IPC::Run qw( harness timeout ) ;
 use UNIVERSAL qw( isa ) ;
 
 my $h ;
+my $t ;
 my $in ;
 my $out ;
 my $started ;
@@ -25,60 +26,77 @@ my $started ;
 my @tests = (
 
 sub {
-   $h = harness( [ $^X ], \$in, \$out ) ;
+   $h = harness( [ $^X ], \$in, \$out, $t = timeout( 1 ) ) ;
    ok( isa( $h, 'IPC::Run' ) ) ;
 },
-
-sub { ok( ! defined $h->timeout ) },
-
-sub { $h->timeout(  0   ) ;  ok( $h->timeout,   0 ) },
-sub { $h->timeout(  0.1 ) ;  ok( $h->timeout      ) },
-sub { $h->timeout(  1   ) ;  ok( $h->timeout,   1 ) },
-sub { $h->timeout( 30   ) ;  ok( $h->timeout,  30 ) },
-sub { $h->timeout( 30.1 ) ;  ok( $h->timeout > 30 ) },
-
-sub { $h->timeout( "1:0" ) ;      ok( $h->timeout,    60 ) },
-sub { $h->timeout( "1:0:0" ) ;    ok( $h->timeout,  3600 ) },
-sub { $h->timeout( "1:1:1" ) ;    ok( $h->timeout,  3661 ) },
-sub { $h->timeout( "1:1:1.1" ) ;  ok( $h->timeout > 3661 ) },
-
-sub { $h->timeout( undef ) ; ok( ! defined $h->timeout ) },
+sub { ok( !! $t->is_reset   ) },
+sub { ok( !  $t->is_running ) },
+sub { ok( !  $t->is_expired ) },
 
 sub {
-   $h->timeout( 1 ) ;
-   sleep 2 ;
+   $started = time ;
+   $h->start ;
+   ok( 1 ) ;
+},
+sub { ok( !  $t->is_reset   ) },
+sub { ok( !! $t->is_running ) },
+sub { ok( !  $t->is_expired ) },
+
+sub {
+   $in = '' ;
+   eval { $h->pump };
+   # Older perls' Test.pms don't know what to do with qr//s
+   $@ =~ /IPC::Run: timeout/ ? ok( 1 ) : ok( $@, qr/IPC::Run: timeout/ ) ;
+},
+
+sub {
+   my $elapsed = time - $started ;
+   $elapsed >= 1 ? ok( 1 ) : ok( $elapsed, ">= 1" ) ;
+},
+
+sub { ok( $t->interval, 1 ) },
+sub { ok( !  $t->is_reset   ) },
+sub { ok( !  $t->is_running ) },
+sub { ok( !! $t->is_expired ) },
+
+##
+## Starting from an expired state
+##
+sub {
+   $started = time ;
+   $h->start ;
+   ok( 1 ) ;
+},
+sub { ok( !  $t->is_reset   ) },
+sub { ok( !! $t->is_running ) },
+sub { ok( !  $t->is_expired ) },
+sub {
+   $in = '' ;
+   eval { $h->pump };
+   $@ =~ /IPC::Run: timeout/ ? ok( 1 ) : ok( $@, qr/IPC::Run: timeout/ ) ;
+},
+sub { ok( !  $t->is_reset   ) },
+sub { ok( !  $t->is_running ) },
+sub { ok( !! $t->is_expired ) },
+
+sub {
+   my $elapsed = time - $started ;
+   $elapsed >= 1 ? ok( 1 ) : ok( $elapsed, ">= 1" ) ;
+},
+
+sub {
+   $h = harness( [ $^X ], \$in, \$out, timeout( 1 ) ) ;
    $started = time ;
    $h->start ;
    $in = '' ;
    eval { $h->pump };
-   ok( $@ =~ /timed out/ ) ;
+   $@ =~ /IPC::Run: timeout/ ? ok( 1 ) : ok( $@, qr/IPC::Run: timeout/ ) ;
 },
-
-sub { ok( time - $started >= 1 ) },
 
 sub {
-   ok( $h->timeout, 1 ) ;
-   $started = time ;
-   $h->start ;
+   my $elapsed = time - $started ;
+   $elapsed >= 1 ? ok( 1 ) : ok( $elapsed, ">= 1" ) ;
 },
-sub {
-   $in = '' ;
-   eval { $h->pump };
-   ok( $@ =~ /timed out/ ) ;
-},
-
-sub { ok( time - $started >= 1 ) },
-
-sub {
-   $h = harness( [ $^X ], \$in, \$out, { timeout => 1 } ) ;
-   $started = time ;
-   $h->start ;
-   $in = '' ;
-   eval { $h->pump };
-   ok( $@ =~ /timed out/ ) ;
-},
-
-sub { ok( time - $started >= 1 ) },
 
 ) ;
 
