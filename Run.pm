@@ -730,7 +730,7 @@ use Fcntl ;
 use POSIX () ;
 use Symbol ;
 
-$VERSION = '0.33' ;
+$VERSION = '0.34' ;
 
 @ISA = qw( Exporter ) ;
 
@@ -760,6 +760,34 @@ use Errno qw( EAGAIN ) ;
 use File::Spec ;
 use FileHandle ;
 use UNIVERSAL qw( isa ) ;
+
+use fields qw(
+   KIDS
+   PIPES
+   PTYS
+   STATE
+   TEMP_FILTERS
+   TIMEOUT
+   TIMEOUT_END
+
+   RIN
+   WIN
+   EIN
+   PIN
+   ROUT
+   WOUT
+   EOUT
+
+   auto_close_ins
+   break_on_io
+   clear_ins
+   debug
+   non_blocking
+   timeout
+
+   _simulate_fork_failure
+   _simulate_open_failure
+) ;
 
 $debug = 0 ;
 
@@ -1048,7 +1076,7 @@ set \$input_scalars to '' like finish() does.
 =cut
 
 sub run {
-   my $self = start( @_ ) ;
+   my IPC::Run $self = start( @_ ) ;
    $self->{clear_ins} = 0 ;
    $self->finish ;
 }
@@ -1061,11 +1089,12 @@ blessed in to IPC::Run, allowing you to use method call syntax for
 run(), start(), et al if you like.
 
 harness() is provided so that you can pre-build harnesses if you
-would like.  It's not necessary otherwise, since start() calls
-harness() if it needs to.
+would like to, but it's not required..
 
-You may call run(), start() or pump() after calling harness()
-(or after calling run() or finish()).
+You may proceed to run(), start() or pump() after calling harness() (pump()
+calls start() if need be).  Alternatively, you may pass your
+harness specification to run() or start() and let them harness() for
+you.  You can't pass harness specifications to pump(), though.
 
 =cut
 
@@ -1105,14 +1134,19 @@ sub harness {
    my $num = 0 ;
    my $cur_kid ;
 
-   my $self = bless {
-         %$options,
+   my IPC::Run $self ;
+   {
+      no strict 'refs' ;
+      $self = bless [ \%{"FIELDS"} ], __PACKAGE__ ;
+   }
+
+   %$self = (
 	 KIDS       => \@kids,
 	 PIPES      => [],
 	 PTYS       => {},
 	 STATE      => _zippo,
-      },
-      __PACKAGE__ ;
+         %$options,
+   ) ;
 
    _debug "** harnessing" ;
 
@@ -1465,7 +1499,7 @@ sub harness {
 
 
 sub _open_pipes {
-   my $self = shift ;
+   my IPC::Run $self = shift ;
 
    my @errs ;
 
@@ -1910,7 +1944,7 @@ sub _open_pipes {
 	    }
 
 	    unless ( length $$in_ref ) {
-	       unless ( $self->{PAUSED} ) {
+	       unless ( $pipe->{PAUSED} ) {
 		  _debug_fd( 'pausing', $pipe ) ;
 		  vec( $self->{WIN}, $pipe->{FD}, 1 ) = 0 ;
 		  vec( $self->{EIN}, $pipe->{FD}, 1 ) = 0 ;
@@ -1946,7 +1980,7 @@ sub _dup2_gently {
 
 
 sub _do_kid {
-   my $self = shift ;
+   my IPC::Run $self = shift ;
    my ( $kid ) = @_ ;
 
    $debug_fd = $kid->{DEBUG_FD} ;
@@ -2067,7 +2101,7 @@ sub start {
    my $options = @_ > 1 && ref $_[-1] eq 'HASH' ? pop : {} ;
    local $debug = $options->{debug} if defined $options->{debug} ;
 
-   my $self ;
+   my IPC::Run $self ;
    if ( @_ == 1 && isa( $_[0], __PACKAGE__ ) ) {
       $self = shift ;
       $self->{$_} = $options->{$_} for keys %$options ;
@@ -2183,7 +2217,7 @@ sub start {
 
 
 sub _clobber {
-   my $self = shift ;
+   my IPC::Run $self = shift ;
    my ( $file ) = @_ ;
    _debug_fd( "closing", $file ) ;
    my $doomed = $file->{FD} ;
@@ -2353,7 +2387,7 @@ SELECT:
 
 
 sub _cleanup {
-   my $self = shift ;
+   my IPC::Run $self = shift ;
    my $num = 0 ;
    _debug "cleaning up" ;
 
@@ -2519,7 +2553,7 @@ including by pump()s auto-start.
 
 
 sub finish {
-   my $self = shift ;
+   my IPC::Run $self = shift ;
    my $options = @_ && ref $_[-1] eq 'HASH' ? pop : {} ;
 
    local $debug = $self->{debug} if defined $self->{debug} ;
@@ -3100,8 +3134,6 @@ Ability to add external file descriptors w/ filter chains and endpoints.
 Ability to add timeouts and timing generators (i.e. repeating timeouts).
 
 High resolution timeouts.
-
-Convert to using "use fields", for performance & stability.
 
 =head1 LIMITATIONS
 
