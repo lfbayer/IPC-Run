@@ -20,12 +20,12 @@ use IPC::Run qw( harness run binary ) ;
 sub Win32_MODE() ;
 *Win32_MODE = \&IPC::Run::Win32_MODE ;
 
-my $bin_text = "Hello World\r\n" ;
+my $crlf_text = "Hello World\r\n" ;
 
-my $text     = $bin_text ;
+my $text     = $crlf_text ;
 $text =~ s/\r//g if Win32_MODE ;
 
-my $nl_text  = $bin_text ;
+my $nl_text  = $crlf_text ;
 $nl_text =~ s/\r//g ;
 
 my @perl    = ( $^X ) ;
@@ -33,8 +33,9 @@ my @perl    = ( $^X ) ;
 my $emitter_script = q{ binmode STDOUT ; print "Hello World\r\n" } ;
 my @emitter = ( @perl, '-e', $emitter_script ) ;
 
-my $echoer_script = q{ binmode STDIN ; binmode STDOUT ; print <> } ;
-my @echoer = ( @perl, '-e', $echoer_script ) ;
+my $reporter_script =
+   q{ binmode STDIN ; $_ = join "", <>; s/([\000-\037])/sprintf "\\\\0x%02x", ord $1/ge; print } ;
+my @reporter = ( @perl, '-e', $reporter_script ) ;
 
 my $in ;
 my $out ;
@@ -58,33 +59,32 @@ sub { ok run \@emitter, ">", \$out },
 sub { ok f $out, f $text, "no binary" },
 
 sub { ok run \@emitter, ">", binary, \$out },
-sub { ok f $out, f $bin_text, "out binary" },
+sub { ok f $out, f $crlf_text, "out binary" },
 
 sub { ok run \@emitter, ">", binary( 0 ), \$out },
 sub { ok f $out, f $text, "out binary 0" },
 
 sub { ok run \@emitter, ">", binary( 1 ), \$out },
-sub { ok f $out, f $bin_text, "out binary 1" },
+sub { ok f $out, f $crlf_text, "out binary 1" },
 
 ## Test to-kid
-sub { ok run \@echoer, "<", \$text, ">", \$out },
-sub { ok f $out, f $text, "echoer, no binary" },
+sub { ok run \@reporter, "<", \$nl_text, ">", \$out },
+sub { ok $out, "Hello World" . ( Win32_MODE ? "\\0x0d" : "" ) . "\\0x0a", "reporter < \\n" },
 
-sub { ok run \@echoer, "<", \$text, ">", binary, \$out },
-sub { ok f $out, f $bin_text, "echoer, out binary" },
+sub { ok run \@reporter, "<", binary, \$nl_text, ">", \$out },
+sub { ok $out, "Hello World\\0x0a", "reporter < binary \\n" },
 
-sub { ok run \@echoer, "<", binary, \$text, ">", binary, \$out },
-sub { ok f $out, f $text, "echoer, in, out binary" },
+sub { ok run \@reporter, "<", binary, \$crlf_text, ">", \$out },
+sub { ok $out, "Hello World\\0x0d\\0x0a", "reporter < binary \\r\\n" },
 
-sub { ok run \@echoer, "<", binary, \$bin_text, ">", binary, \$out },
-sub { ok f $out, f $bin_text, "echoer, in, out binary, sending \r" },
+sub { ok run \@reporter, "<", binary( 0 ), \$nl_text, ">", \$out },
+sub { ok $out, "Hello World" . ( Win32_MODE ? "\\0x0d" : "" ) . "\\0x0a", "reporter < binary(0) \\n" },
 
-sub { ok run \@echoer, "<", binary( 0 ), \$text, ">", binary, \$out },
-sub { ok f $out, f $bin_text, "echoer, in binary 0, out binary, sending \r" },
+sub { ok run \@reporter, "<", binary( 1 ), \$nl_text, ">", \$out },
+sub { ok $out, "Hello World\\0x0a", "reporter < binary(1) \\n" },
 
-sub { ok run \@echoer, "<", binary( 1 ), \$bin_text, ">", binary, \$out },
-sub { ok f $out, f $bin_text, "in binary 1, out binary, sending \r" },
-
+sub { ok run \@reporter, "<", binary( 1 ), \$crlf_text, ">", \$out },
+sub { ok $out, "Hello World\\0x0d\\0x0a", "reporter < binary(1) \\r\\n" },
 ) ;
 
 plan tests => scalar @tests ;

@@ -1,5 +1,16 @@
 Revision history for Perl extension IPC::Run
 
+0.66 Wed Mar 27 07:42:27 EST 2002
+   - Really dumb down that bad file descriptor test last tweaked in 0.64;
+   the CLI does not script well under internationalization.
+
+0.65 (unreleased)
+   - Win32
+     - pass filehandles to pumpers by number on the command line to avoid 
+     - use 2 arg binmode to force socket handles into/out of binmode
+     - improve t/binmode.t
+     - TODO: test ^Z and \000 pass-through.
+
 0.64 Wed Mar 13 11:04:23 EST 2002
    - Fix a test that fails on AIX because it uses a different message for
      "Bad file descriptor".  Reported by "Dave Gomboc" <dave@cs.ualberta.ca>

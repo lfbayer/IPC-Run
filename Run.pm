@@ -1006,7 +1006,7 @@ in their exit codes.
 
 =cut
 
-$VERSION = 0.64 ;
+$VERSION = 0.66 ;
 
 @ISA = qw( Exporter ) ;
 

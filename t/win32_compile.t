@@ -20,6 +20,7 @@ BEGIN {
    @ISA = qw( Exporter ) ;
    @EXPORT = qw(
       GetOsFHandle 
+      OsFHandleOpen
       OsFHandleOpenFd
       FdGetOsFHandle
       SetHandleInformation

@@ -42,9 +42,11 @@ use Socket qw( IPPROTO_TCP TCP_NODELAY ) ;
 use Symbol ;
 use Text::ParseWords ;
 use Win32::Process ;
+## REMOVE OSFHandleOpen
 use Win32API::File qw(
    GetOsFHandle
    OsFHandleOpenFd
+   OsFHandleOpen
    FdGetOsFHandle
    SetHandleInformation
    HANDLE_FLAG_INHERIT
@@ -95,6 +97,19 @@ sub _dont_inherit {
    }
 }
 
+sub _inherit {       #### REMOVE
+   for ( @_ ) {       #### REMOVE
+      next unless defined $_ ;       #### REMOVE
+      my $fd = $_ ;       #### REMOVE
+      $fd = fileno $fd if ref $fd ;       #### REMOVE
+      _debug "enabling inheritance of ", $fd if _debugging_details ;       #### REMOVE
+      my $osfh = FdGetOsFHandle $fd ;       #### REMOVE
+      croak $^E if ! defined $osfh || $osfh == INVALID_HANDLE_VALUE ;       #### REMOVE
+       #### REMOVE
+      SetHandleInformation( $osfh, HANDLE_FLAG_INHERIT, 1 ) ;       #### REMOVE
+   }       #### REMOVE
+}       #### REMOVE
+       #### REMOVE
 #sub _inherit {
 #   for ( @_ ) {
 #      next unless defined $_ ;
@@ -130,11 +145,24 @@ IPC::Run::Pipe::Win32tcp subclass of it, I think.
 ## in the children (it needs almost no other modules).
 sub _pump {
    require IPC::Run ;
-   my ( $parent_pid, $parent_start_time, $debug, $child_label, @opts ) = @ARGV ;
+   my ( $stdin_fh, $stdout_fh, $debug_fh, $parent_pid, $parent_start_time, $debug, $child_label ) = @ARGV ;
 
-   binmode STDIN  if grep /binmodein/,  @opts ;
-   binmode STDOUT if grep /binmodeout/, @opts ;
+   ## For some reason these get created with binmode on.  AAargh, gotta       #### REMOVE
+   ## do it by hand below.       #### REMOVE
+   if ( $debug ) {       #### REMOVE
+      close STDERR;       #### REMOVE
+      OsFHandleOpen( \*STDERR, $debug_fh, "w" )       #### REMOVE
+	 or print "$! opening STDERR as Win32 handle $debug_fh in pumper $$" ;       #### REMOVE
+   }       #### REMOVE
+   close STDIN;       #### REMOVE
+   OsFHandleOpen( \*STDIN, $stdin_fh, "r" )       #### REMOVE
+      or die "$! opening STDIN as Win32 handle $stdin_fh in pumper $$" ;       #### REMOVE
+   close STDOUT;       #### REMOVE
+   OsFHandleOpen( \*STDOUT, $stdout_fh, "w" )       #### REMOVE
+      or die "$! opening STDOUT as Win32 handle $stdout_fh in pumper $$" ;       #### REMOVE
 
+   binmode STDIN;
+   binmode STDOUT;
    $| = 1 ;
    select STDERR ; $| = 1 ; select STDOUT ;
 
@@ -146,7 +174,10 @@ sub _pump {
       fileno STDERR,
       $child_label,
    ) ;
+
    _debug "Entered" if _debugging_details ;
+
+
    # No need to close all fds; win32 doesn't seem to pass any on to us.
    $| = 1 ;
    my $buf ;
@@ -154,6 +185,15 @@ sub _pump {
    while (1) {
       my $count = sysread STDIN, $buf, 10_000 ;
       last unless $count ;
+      if ( _debugging_gory_details ) {
+	 my $msg = "'$buf'" ;
+	 substr( $msg, 100, -1 ) = '...' if length $msg > 100 ;
+	 $msg =~ s/\n/\\n/g ;
+	 $msg =~ s/\r/\\r/g ;
+	 $msg =~ s/\t/\\t/g ;
+	 $msg =~ s/([\000-\037\177-\277])/sprintf "\0x%02x", ord $1/eg ;
+	 _debug sprintf( "%5d chars revc: ", $count ), $msg ;
+      }
       $total_count += $count ;
       if ( _debugging_gory_details ) {
 	 my $msg = "'$buf'" ;
@@ -162,7 +202,7 @@ sub _pump {
 	 $msg =~ s/\r/\\r/g ;
 	 $msg =~ s/\t/\\t/g ;
 	 $msg =~ s/([\000-\037\177-\277])/sprintf "\0x%02x", ord $1/eg ;
-	 _debug sprintf( "%5d chars: ", $count ), $msg ;
+	 _debug sprintf( "%5d chars sent: ", $count ), $msg ;
       }
       print $buf ;
    }
@@ -205,29 +245,45 @@ sub _pump {
 ## The problem with threaded perls is that they dup() all sorts of
 ## filehandles and fds and don't allow sufficient control over
 ## closing off the ones we don't want.
+
 sub _spawn_pumper {
    my ( $stdin, $stdout, $debug_fd, $child_label, @opts ) = @_ ;
    my ( $stdin_fd, $stdout_fd ) = ( fileno $stdin, fileno $stdout ) ;
 
-   my $process ;
+   _debug "pumper stdin = ", $stdin_fd;
+   _debug "pumper stdout = ", $stdout_fd;
+   _inherit $stdin_fd, $stdout_fd, $debug_fd ;
+   my @I_options = map qq{"-I$_"}, @INC;
+
    my $cmd_line = join( " ",
-      qw(perl -MIPC::Run::Win32Helper -e _pump ),
+      qq{"$^X"},
+      @I_options,
+      qw(-MIPC::Run::Win32Helper -e _pump ),
+## I'm using this clunky way of passing filehandles to the child process
+## in order to avoid some kind of premature closure of filehandles
+## problem I was having with VCP's test suite when passing them
+## via CreateProcess.  All of the ## REMOVE code is stuff I'd like
+## to be rid of and the ## ADD code is what I'd like to use.
+      FdGetOsFHandle( $stdin_fd ), ## REMOVE
+      FdGetOsFHandle( $stdout_fd ), ## REMOVE
+      FdGetOsFHandle( $debug_fd ), ## REMOVE
       $$, $^T, IPC::Run::_debugging_level(), qq{"$child_label"},
       @opts
    ) ;
 
-   open SAVEIN,  "<&STDIN"  or croak "$! saving STDIN" ;
-   open SAVEOUT, ">&STDOUT" or croak "$! saving STDOUT" ;
-   open SAVEERR, ">&STDERR" or croak "$! saving STDERR" ;
-   _dont_inherit \*SAVEIN ;
-   _dont_inherit \*SAVEOUT ;
-   _dont_inherit \*SAVEERR ;
-   open STDIN,  "<&$stdin_fd"  or croak "$! dup2()ing $stdin_fd (pumper's STDIN)" ;
-   open STDOUT, ">&$stdout_fd" or croak "$! dup2()ing $stdout_fd (pumper's STDOUT)" ;
-   open STDERR, ">&$debug_fd" or croak "$! dup2()ing $debug_fd (pumper's STDERR/debug_fd)" ;
+#   open SAVEIN,  "<&STDIN"  or croak "$! saving STDIN" ;       #### ADD
+#   open SAVEOUT, ">&STDOUT" or croak "$! saving STDOUT" ;       #### ADD
+#   open SAVEERR, ">&STDERR" or croak "$! saving STDERR" ;       #### ADD
+#   _dont_inherit \*SAVEIN ;       #### ADD
+#   _dont_inherit \*SAVEOUT ;       #### ADD
+#   _dont_inherit \*SAVEERR ;       #### ADD
+#   open STDIN,  "<&$stdin_fd"  or croak "$! dup2()ing $stdin_fd (pumper's STDIN)" ;       #### ADD
+#   open STDOUT, ">&$stdout_fd" or croak "$! dup2()ing $stdout_fd (pumper's STDOUT)" ;       #### ADD
+#   open STDERR, ">&$debug_fd" or croak "$! dup2()ing $debug_fd (pumper's STDERR/debug_fd)" ;       #### ADD
 
    _debug "pump cmd line: ", $cmd_line ;
 
+   my $process ;
    Win32::Process::Create( 
       $process,
       $^X,
@@ -237,12 +293,12 @@ sub _spawn_pumper {
       ".",
    ) or croak "$!: Win32::Process::Create()" ;
 
-   open STDIN,  "<&SAVEIN"  or croak "$! restoring STDIN" ;
-   open STDOUT, ">&SAVEOUT" or croak "$! restoring STDOUT" ;
-   open STDERR, ">&SAVEERR" or croak "$! restoring STDERR" ;
-   close SAVEIN             or croak "$! closing SAVEIN" ;
-   close SAVEOUT            or croak "$! closing SAVEOUT" ;
-   close SAVEERR            or croak "$! closing SAVEERR" ;
+#   open STDIN,  "<&SAVEIN"  or croak "$! restoring STDIN" ;       #### ADD
+#   open STDOUT, ">&SAVEOUT" or croak "$! restoring STDOUT" ;       #### ADD
+#   open STDERR, ">&SAVEERR" or croak "$! restoring STDERR" ;       #### ADD
+#   close SAVEIN             or croak "$! closing SAVEIN" ;       #### ADD
+#   close SAVEOUT            or croak "$! closing SAVEOUT" ;       #### ADD
+#   close SAVEERR            or croak "$! closing SAVEERR" ;       #### ADD
 
    close $stdin  or croak "$! closing pumper's stdin in parent" ;
    close $stdout or croak "$! closing pumper's stdout in parent" ;
@@ -273,13 +329,15 @@ sub _socket {
       or croak "$!: setsockopt()";
 
    my $port ;
+   my @errors ;
 PORT_FINDER_LOOP:
    {
       $port = $next_port ;
-      $next_port = 0 if ++$next_port > 65_535 ;
+      $next_port = 2048 if ++$next_port > 65_535 ; 
       unless ( bind $listener, sockaddr_in( $port, INADDR_ANY ) ) {
-        croak "$!: $! on port $port" unless $! =~ /TODO!!!!/ ;
-        goto PORT_FINDER_LOOP 
+	 push @errors, "$! on port $port" ;
+	 croak join "\n", @errors if @errors > 10 ;
+         goto PORT_FINDER_LOOP;
       }
    }
 
@@ -338,14 +396,17 @@ sub win32_fake_pipe {
 
    @{$self}{qw( PARENT_HANDLE PUMP_SOCKET_HANDLE )} = _socket $parent_handle ;
 
+   binmode $self->{PARENT_HANDLE}, $binmode ? ":raw" : ":crlf" or die $!;
+   binmode $self->{PUMP_SOCKET_HANDLE} or die $!;
+
 _debug "PUMP_SOCKET_HANDLE = ", fileno $self->{PUMP_SOCKET_HANDLE} ;
-#my $buf ;
-#$buf = "write on child end of " . fileno( $self->{WRITE_HANDLE} ) . "\n\n\n\n\n" ;
-#POSIX::write(fileno $self->{WRITE_HANDLE}, $buf, length $buf) or warn "$! in syswrite" ;
-#$buf = "write on parent end of " . fileno( $self->{CHILD_HANDLE} ) . "\r\n" ;
-#POSIX::write(fileno $self->{CHILD_HANDLE},$buf, length $buf) or warn "$! in syswrite" ;
-#   $self->{CHILD_HANDLE}->autoflush( 1 ) ;
-#   $self->{WRITE_HANDLE}->autoflush( 1 ) ;
+##my $buf ;
+##$buf = "write on child end of " . fileno( $self->{WRITE_HANDLE} ) . "\n\n\n\n\n" ;
+##POSIX::write(fileno $self->{WRITE_HANDLE}, $buf, length $buf) or warn "$! in syswrite" ;
+##$buf = "write on parent end of " . fileno( $self->{CHILD_HANDLE} ) . "\r\n" ;
+##POSIX::write(fileno $self->{CHILD_HANDLE},$buf, length $buf) or warn "$! in syswrite" ;
+##   $self->{CHILD_HANDLE}->autoflush( 1 ) ;
+##   $self->{WRITE_HANDLE}->autoflush( 1 ) ;
 
    ## Now fork off a data pump and arrange to return the correct fds.
    if ( $dir eq "<" ) {
@@ -387,10 +448,6 @@ _debug "PUMP_PIPE_HANDLE = ", fileno $self->{PUMP_PIPE_HANDLE} ;
 	 : ( $self->{PUMP_PIPE_HANDLE}, $self->{PUMP_SOCKET_HANDLE} ),
       $debug_fd,
       "pump$dir$parent_fd",
-      ## parent side should always be binmoded
-      $binmode               ? ( "binmodein", "binmodeout" )
-         : ( $dir eq "<" )   ? ( "binmodein"               )
-                             : (              "binmodeout" ),
    ) ;
 
 {
