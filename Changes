@@ -1,5 +1,25 @@
 Revision history for Perl extension IPC::Bashem.
 
-0.001  Tue Apr 25 22:10:07 2000
-	- original version; created by h2xs 1.19
+
+0.2  Thu Jun  1 01:48:29 EDT 2000
+   - Undid the creation of a pipe when passing a \*FOO or an IO::Handle
+     ref and added '<|<', \*IN and '>|>', \*OUT syntax instead.  This was
+     because some very subtle bugs might have occured if \*FOO was left
+     in the wrong opened/closed state before calling run(), start() or
+     harness().  Now, \*FOO must be open before the start() call, and
+     '<|<' and '>|>' will close \*IN or \*OUT (or whatever) and open
+     a pipe on it.  This is analagous to IPC/Open{2,3}.pm behaviors.
+   - Added eg/factorial_scalar and eg/runsh.  Rewrote eg/factorial_pipe.
+   - Fixed bug that was preventing input scalar refs (ie input for the 
+     child process) from ever being read from a second time.  This
+     caused pump() to hang.
+   - Cleaned up calculation and use of timeout values so that when
+     select() times out, it isn't called again.  It's now adding one
+     second to the timeout value because time() resolution is 1 second
+     and we want to guarantee a minimum timeout even when we sample the
+     start time at the end of a second
+   - minor name changes to some field names to make the code marginally
+     less obscure.
+
+0.1  Tue Apr 25 22:10:07 2000
 

@@ -2,10 +2,13 @@ Makefile.PL
 Changes
 MANIFEST
 MANIFEST.SKIP
-IPC/Run.pm
+Run.pm
 eg/factorial
 eg/factorial_pipe
+eg/factorial_scalar
+eg/runsh
 t/filter.t
 t/harness.t
+t/pump.t
 t/run.t
 t/timeout.t

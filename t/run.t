@@ -264,11 +264,10 @@ sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
    $fd_map = map_fds ;
-   close F ;
-   $h = start \@perl, \*F, \$out, \$err ;
+   $h = start \@perl, '<|<', \*IN, '>', \$out, '2>', \$err ;
    ## Assume this won't block...
-   print F $emitter_script ;
-   close F or warn $! ;
+   print IN $emitter_script ;
+   close IN or warn $! ;
    $r = $h->finish ;
    ok( $r ) ;
 },
@@ -329,7 +328,7 @@ sub { ok( $err, uc( "err: $text more err data" ) ) },
 ##
 sub {
    $fd_map = map_fds ;
-   my $r = run \@emitter, \undef, \*OUT, \*ERR ;
+   my $r = run \@emitter, \undef, '>|>', \*OUT, '2>|>', \*ERR ;
    $out = '' ;
    $err = '' ;
    read OUT, $out, 10000 or warn $!;
