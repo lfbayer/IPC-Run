@@ -913,7 +913,7 @@ use Fcntl ;
 use POSIX qw() ;
 use Symbol ;
 
-$VERSION = '0.5' ;
+$VERSION = '0.51' ;
 
 @ISA = qw( Exporter ) ;
 
@@ -931,6 +931,7 @@ my @FILTERS    = qw(
 my @API        = qw(
    run
    harness start pump finish
+   signal kill_kill reap_nb
    io timer timeout
    close_terminal
 ) ;
@@ -2516,7 +2517,7 @@ sub start {
 	    ? "CODE ref"
 	    : (
 	       "`",
-	       join( " ", map /[^\w-.]/ ? "'$_'" : $_, @{$kid->{VAL}} ),
+	       join( " ", map /[^\w.-]/ ? "'$_'" : $_, @{$kid->{VAL}} ),
 	       "`"
 	    ) ;
 	 eval {
