@@ -1,11 +1,17 @@
 Revision history for Perl extension IPC::Run
 
+0.62 Tue Jan  1 16:40:54 EST 2002
+   - Have all children close all file descriptors opened by the parent
+     harness, otherwise children of different harnesses can unwittingly
+     keep open fds the parent closes, thus preventing other children
+     from seeing them close.  Reported by Blair Zajac <blair@orcaware.com>.
+
 0.61 Fri Dec  7 05:21:28 EST 2001
    - Fix up signal.t to not fail due to printing not working quite right in
-     signal handlers.  Spotted in the wild by Blair Zajac <blair@orcaware.com>
+     signal handlers.  Spotted in the wild by Blair Zajac <blair@orcaware.com>.
 
 0.6 Thu Dec  6 04:36:57 EST 2001
-   - Get binmode--(">", binary) and ("<", binary)--working on Win32
+   - Get binmode--(">", binary) and ("<", binary)--working on Win32.
 
 0.56 Sun Dec  2 09:18:19 EST 2001
    - IPC::Run now throws exceptions from the post-fork, pre-exec child process

@@ -1006,7 +1006,7 @@ in their exit codes.
 
 =cut
 
-$VERSION = 0.61 ;
+$VERSION = 0.62 ;
 
 @ISA = qw( Exporter ) ;
 
@@ -1069,6 +1069,7 @@ require IPC::Run::Timer ;
 use UNIVERSAL qw( isa ) ;
 
 use fields (
+   'ID',           # An identifier of this harness
    'IOS',          # ARRAY of filehandles passed in by caller for us to watch
                    # like PIPES except that we perform no management of these,
                    # just I/O.  These are encapsulated in IPC::Run::IO
@@ -1136,6 +1137,14 @@ sub _newed()    {0}
 sub _harnessed(){1}
 sub _finished() {2}   ## _finished behave almost exactly like _harnessed
 sub _started()  {3}
+
+##
+## Which fds have been opened in the parent.  This may have extra fds, since
+## we aren't all that rigorous about closing these off, but that's ok.  This
+## is used on Unixish OSs to close all fds in the child that aren't needed
+## by that particular child.
+my %fds ;
+
 
 ##
 ## Debugging routines
@@ -1255,8 +1264,12 @@ sub _debug {
    my $debug_id ;
    $debug_id = join( 
       " ",
-      defined $debug_name && length $debug_name ? $debug_name : (),
-      $$ ne $parent_pid                         ? "pid $$"    : (),
+      join(
+         "",
+         defined $cur_self ? "#$cur_self->{ID}" : (),
+         "($$)",
+      ),
+      defined $debug_name && length $debug_name ? $debug_name        : (),
    ) ;
    my $prefix = join(
       "",
@@ -1403,10 +1416,11 @@ sub _empty($) { ! ( defined $_[0] && length $_[0] ) }
 sub _close {
    confess 'undef' unless defined $_[0] ;
    no strict 'refs' ;
-   my $fn = $_[0] =~ /^\d+$/ ? $_[0] : fileno $_[0] ;
-   my $r = POSIX::close $_[0] ;
+   my $fd = $_[0] =~ /^\d+$/ ? $_[0] : fileno $_[0] ;
+   my $r = POSIX::close $fd ;
    $r = $r ? '' : " ERROR $!" ;
-   _debug "close( $fn )$r" if _debugging_details ;
+   delete $fds{$fd} ;
+   _debug "close( $fd ) = " . ( $r || 0 ) if _debugging_details ;
 }
 
 sub _dup {
@@ -1415,6 +1429,7 @@ sub _dup {
    croak "$!: dup( $_[0] )" unless defined $r ;
    $r = 0 if $r eq '0 but true' ;
    _debug "dup( $_[0] ) = $r" if _debugging_details ;
+   $fds{$r} = 1 ;
    return $r ;
 }
 
@@ -1425,6 +1440,7 @@ sub _dup2_rudely {
    croak "$!: dup2( $_[0], $_[1] )" unless defined $r ;
    $r = 0 if $r eq '0 but true' ;
    _debug "dup2( $_[0], $_[1] ) = $r" if _debugging_details ;
+   $fds{$r} = 1 ;
    return $r ;
 }
 
@@ -1466,6 +1482,7 @@ if _debugging_details ;
    croak "$!: open( $_[0], ", sprintf( "0x%03x", $_[1] ), " )" unless defined $r ;
    _debug "open( $_[0], ", sprintf( "0x%03x", $_[1] ), " ) = $r"
       if _debugging_data ;
+   $fds{$r} = 1 ;
    return $r ;
 }
 
@@ -1476,6 +1493,7 @@ sub _pipe {
    my ( $r, $w ) = POSIX::pipe ;
    croak "$!: pipe()" unless $r ;
    _debug "pipe() = ( $r, $w ) " if _debugging_details ;
+   $fds{$r} = $fds{$w} = 1 ;
    return ( $r, $w ) ;
 }
 
@@ -1509,6 +1527,7 @@ sub _pty {
    $pty->blocking( 0 ) or croak "$!: pty->blocking ( 0 )" ;
    _debug "pty() = ( ", $pty->fileno, ", ", $pty->slave->fileno, " )"
       if _debugging_details ;
+   $fds{$pty->fileno} = $fds{$pty->slave->fileno} = 1 ;
    return $pty ;
 }
 
@@ -1535,7 +1554,8 @@ sub _spawn {
    croak "$! during fork" unless defined $kid->{PID} ;
 
    unless ( $kid->{PID} ) {
-      _close $sync_reader_fd ;
+      ## _do_kid_and_exit closes sync_reader_fd since it closes all unwanted and
+      ## unloved fds.
       $self->_do_kid_and_exit( $kid ) ;
    }
    _debug "fork() = ", $kid->{PID} if _debugging_details ;
@@ -1801,6 +1821,7 @@ you.  You can't pass harness specifications to pump(), though.
 ## lexical scope hash, or per instance?  'Course they can do that
 ## now by using a [...] to hold the command.
 ##
+my $harness_id = 0 ;
 sub harness {
    my $options ;
    if ( @_ && ref $_[-1] eq 'HASH' ) {
@@ -1847,6 +1868,7 @@ sub harness {
 
    local $cur_self = $self ;
 
+   $self->{ID}    = ++$harness_id ;
    $self->{IOS}   = [] ;
    $self->{KIDS}  = [] ;
    $self->{PIPES} = [] ;
@@ -2687,6 +2709,8 @@ sub _do_kid_and_exit {
       ## Don't close STDIN, STDOUT, STDERR: they should be inherited or
       ## overwritten below.
       my @needed = ( 1, 1, 1 ) ;
+      $needed[ $self->{SYNC_WRITER_FD} ] = 1 ;
+      $needed[ $self->{DEBUG_FD} ] = 1 if defined $self->{DEBUG_FD} ;
 
       for ( @{$kid->{OPS}} ) {
 	 $needed[ $_->{TFD} ] = 1 if defined $_->{TFD} ;
@@ -2718,16 +2742,28 @@ sub _do_kid_and_exit {
 	       $needed[$_->{TFD}] = 1 ;
 	    }
 
-	    for ( $_->{FD}, ( $sibling != $kid ? $_->{TFD} : () ) ) {
-	       if ( defined $_ && ! $closed[$_] && ! $needed[$_] ) {
-		  _close( $_ ) ;
-		  $closed[$_] = 1 ;
-		  $_ = undef ;
-	       }
-	    }
+#	    for ( $_->{FD}, ( $sibling != $kid ? $_->{TFD} : () ) ) {
+#	       if ( defined $_ && ! $closed[$_] && ! $needed[$_] ) {
+#		  _close( $_ ) ;
+#		  $closed[$_] = 1 ;
+#		  $_ = undef ;
+#	       }
+#	    }
 	 }
       }
 
+      ## This is crude: we have no way of keeping track of browsing all open
+      ## fds, so we scan to a fairly high fd.
+      _debug "open fds: ", join " ", keys %fds if _debugging_details ;
+      for (keys %fds) {
+         if ( ! $closed[$_] && ! $needed[$_] ) {
+            _close( $_ ) ;
+            $closed[$_] = 1 ;
+         }
+      }
+
+      ## Lazy closing is so the same fd (ie the same TFD value) can be dup2'ed on
+      ## several times.
       my @lazy_close ;
       for ( @{$kid->{OPS}} ) {
 	 if ( defined $_->{TFD} ) {

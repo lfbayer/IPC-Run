@@ -24,6 +24,7 @@ t/filter.t
 t/harness.t
 t/io.t
 t/kill_kill.t
+t/parallel.t
 t/pty.t
 t/pump.t
 t/run.t
