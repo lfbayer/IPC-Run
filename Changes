@@ -1,5 +1,8 @@
 Revision history for Perl extension IPC::Run
 
+0.75 Tue Jan 28 11:33:40 EST 2003
+   - Fix a bug that was causing _pipe() to seem to fail when feeding
+
 0.74 Thu May 23 09:24:57 EDT 2002
    - Skip a set of pty tests that deadlock on freebsd.  Reported and
      investigated by Rocco Caputo <troc@pobox.com>.  perldoc t/pty.t

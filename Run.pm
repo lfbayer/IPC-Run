@@ -6,6 +6,8 @@ package IPC::Run ;
 # License or the Artistic License, as specified in the README file.
 #
 
+$VERSION = 0.75 ;
+
 =head1 NAME
 
 IPC::Run - system() and background procs w/ piping, redirs, ptys (Unix, Win32)
@@ -1013,8 +1015,6 @@ in their exit codes.
 
 =cut
 
-$VERSION = 0.74 ;
-
 @ISA = qw( Exporter ) ;
 
 ## We use @EXPORT for the end user's convenience: there's only one function
@@ -1350,7 +1350,7 @@ sub _pipe {
    ## since most children expect writes to stdout to block rather than
    ## do a partial write.
    my ( $r, $w ) = POSIX::pipe ;
-   croak "$!: pipe()" unless $r ;
+   croak "$!: pipe()" unless defined $r ;
    _debug "pipe() = ( $r, $w ) " if _debugging_details ;
    $fds{$r} = $fds{$w} = 1 ;
    return ( $r, $w ) ;
