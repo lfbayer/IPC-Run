@@ -182,6 +182,25 @@ sub { ok( $out,        $text       ) },
 sub { ok( $err,    uc( $text )     ) },
 
 ##
+## Long output, to test for blocking read.
+##
+## Assume pipe buffer length <= 10000, need to double that to assure enough
+## chars to fill a buffer so.  This test adapted from a test submitted by
+## Borislav Deianov <borislav@ensim.com>.
+sub {
+   $in = "-" x 20000 . "end\n" ;
+   $out = 'REPLACE ME' ;
+   $fd_map = map_fds ;
+   $r = run [ $^X, qw{-e print"-"x20000;<STDIN>} ], \$in, \$out ;
+   ok( $r ) ;
+},
+sub { ok( ! $? ) },
+sub { ok( map_fds, $fd_map ) },
+
+sub { ok( length $out, 20000 ) },
+sub { ok( $out !~ /[^-]/ ) },
+
+##
 ## child function, scalar ref I & O redirection, succinct mode.
 ##
 sub {

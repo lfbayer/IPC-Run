@@ -13,82 +13,56 @@ IPC::Run - Run subprocesses w/ piping, redirection, and pseudo-ttys
 
 =head1 SYNOPSIS
 
-   use IPC::Run (
-      qw( run ),                       # Batch mode API
-      qw( harness start pump finish ), # Intermittent API
-      qw( io timer timeout ),          # Helper objects.
-   ) ;
+   ## First,a command to run:
+      my @cat = qw( cat ) ;
 
-   my @cat = qw( cat in.txt - ) ;
+   ## Using run() instead of system():
+      use IPC::Run qw( run timeout ) ;
 
-   ## Running a command with stdin closed, output redirected
-   ## to scalars and a 10 second timeout:
-   run \@cat, \undef, \$out, \$err, timeout( 10 )
-      or die "cat returned $?";
+      run \@cmd, \$in, \$out, \$err, timeout( 10 ) or die "cat: $?"
 
-   ## Redirecting stdin from various scalars:
-   $in = "input" ;
-   run \@cat, \$in,      \$out, \$err, ... ;
-   run \@cat, \"input",  \$out, \$err, ... ;
-   run \@cat, \<<TOHERE, \$out, \$err, ... ;
-   input
-   TOHERE
+      # Can do I/O to sub refs and filenames, too:
+      run \@cmd, "in.txt", \&out, \&err or die "cat: $?"
+      run \@cat, "in.txt", '>>', "out.txt", '2>>', "err.txt" ;
 
-   ## I/O redirection using functions, filenames.  You can mix
-   ## techniques, too.
-   run \@cat, \&in,      \&out, \&err ... ;
-   run \@cat, '<', $in_filename, '>', $out_name, '2>', $err_name ... ;
 
-   ## Redirecting using psuedo-terminals.
-   run \@cat, '<pty<', \$in,  '>pty>', \$out_and_err ;
-   run \@cat, '<pty<', \&in,  '>pty>', \&out_and_err ;
+      # Redirecting using psuedo-terminals instad of pipes.
+      run \@cat, '<pty<', \$in,  '>pty>', \$out_and_err ;
 
-   # Incrementally read from / write to scalars.  Note that $in_q
-   # is a queue that is drained as it is used, which is not the
-   # way run() treats inputs.  $h is for "harness".
-      my $h = start(
-         \@cat, \$in_q, \$out_q, \$err_q,
-	 timeout( name => "process timeout", 10 ),
-	 $stall_timeout = timeout( name => "stall timeout", 5 ),
-      ) ;
+   ## Scripting subprocesses (like Expect):
+
+      use IPC::Run qw( start pump finish timeout ) ;
+
+      # Incrementally read from / write to scalars. 
+      # $in is drained as it is fed to cat's stdin,
+      # $out accumulates cat's stdout
+      # $err accumulates cat's stderr
+      # $h is for "harness".
+      my $h = start \@cat, \$in, \$out, \$err, timeout( 10 ) ;
 
       $in_q .= "some input\n" ;
-      $stall_timeout->start ;
-      pump $h until $out_q =~ /input/ ;
-      warn $err_q ; 
-      $err_q = '' ;
-      $out_q = '' ;
+      pump $h until $out_q =~ /input\n/g ;
 
-      $stall_timeout->start ;
       $in_q .= "some more input\n" ;
-      pump $h until $out_q =~ /input/ ;
-      warn $err_q ; 
-      $err_q = '' ;
+      pump $h until $out_q =~ /\G.*more input\n/ ;
 
       $in_q .= "some final input\n" ;
-      $h->timeout( "1:00" ) ;
-      $stall_timeout->start ;
       finish $h or die "cat returned $?" ;
-      warn $err_q ; 
-      print $out_q ;
+
+      warn $err_q if $err_q ; 
+      print $out_q ;         ## All of cat's output
 
    # Piping between children
-      run \@cat, '|', [qw(gzip)] ;
+      run \@cat, '|', \@gzip ;
 
    # Multiple children simultaneously (run() blocks until all
    # children exit, use start() for background execution):
-      run [qw(foo1)], '&', [qw(foo2)] ;
-
-   # Spawning a subroutine (only on systems with true fork()/exec())
-      run \&child_sub, \$in, \$out ;
+      run \@foo1, '&', \@foo2 ;
 
    # Calling \&set_up_child in the child before it executes the
    # command (only works on systems with true fork() & exec())
       run \@cat, \$in, \$out,
          init => \&set_up_child ;
-
-   # Append output to named files
-      run( \@cat, '>>', $out_f_name, '2>>', $err_f_name ) ;
 
    # Read from / write to file handles you open and close
       open IN,  '<in.txt'  or die $! ;
@@ -141,83 +115,194 @@ IPC::Run - Run subprocesses w/ piping, redirection, and pseudo-ttys
 
 =head1 DESCRIPTION
 
-IPC::Run allows you run and interact with child processes, files, pipes,
-and pseudo-ttys.  Both event-loop and procedural techniques are supported
-and may be mixed.  Likewise, functional and OO API styles are both
-supported and may be mixed.
+IPC::Run allows you run and interact with child processes using files, pipes,
+and pseudo-ttys.  Both system()-style and scripted usages are supported and
+may be mixed.  Likewise, functional and OO API styles are both supported and
+may be mixed.
 
-Various redirection operators reminiscent of those
-seen on common Unix and DOS command lines are provided.
+Various redirection operators reminiscent of those seen on common Unix and DOS
+command lines are provided.
 
 =head2 Harnesses
 
-Child processes and I/O handles are gathered in to a harness, then run
-until the processing is finished or aborted.
+Child processes and I/O handles are gathered in to a harness, then started and
+run until the processing is finished or aborted.
 
 =head2 run() vs. start(); pump(); finish();
 
-There are two modes you can run harnesses in: incremental and batch.
-In incremental mode, you use start() and pump() to activate the harness
-and interact with it, then switch to batch mode and
-use run() or finish() to let the harness run to completion.
+There are two modes you can run harnesses in: run() functions as an enhanced
+system(), and start()/pump()/finish() allow for background processes and
+scripted interactions with them.
 
-In batch mode, you just use run() or start() and finish() and let things
-run to completion.
-
-In batch mode, all data to be sent to the harness is set up
-in advance, the harness is run and all output is collected from it, then
-any child processes are waited for:
+When using run(), all data to be sent to the harness is set up in advance
+(though one can feed subprocesses input from subroutine refs to get around this
+limitation). The harness is run and all output is collected from it, then any
+child processes are waited for:
 
    run \@cmd, \<<IN, \$out ;
    blah
    IN
 
-Incremental mode is provided by start(), pump(), and finish():
+   ## To precompile harnesses and run them later:
+   my $h = harness \@cmd, \<<IN, \$out ;
+   blah
+   IN
 
-   my $h = start \@cat, \$in_q, \$out_q, \$err_q ;
-   $in_q = "first input\n" ;
+   run $h ;
 
-   pump $h while length $in_q ;
-   warn $err_q if length $err_q ; 
-   $err_q = '' ;
+The background and scripting API is provided by start(), pump(), and finish():
+start() creates a harness if need be (by calling harness()) and launches any
+subprocesses, pump() allows you to poll them for activity, and finish() then
+monitors the harnessed activities until they complete.
 
-   $in_q = "second input\n" ;
-   pump $h until $out_q =~ /second input/ ;
+   ## Build the harness, open all pipes, and launch the subprocesses
+   my $h = start \@cat, \$in, \$out ;
+   $in = "first input\n" ;
 
+   ## Now do I/O.  start() does no I/O.
+   pump $h while length $in ;  ## Wait for all input to go
+
+   ## Now do some more I/O.
+   $in = "second input\n" ;
+   pump $h until $out =~ /second input/ ;
+
+   ## Clean up
+   finish $h or die "cat returned $?" ;
+
+You can optionally compile the harness with harness() prior to start()ing or
+run()ing, and you may omit start() between harness() and pump().  You might
+want to do these things if you compile your harnesses ahead of time.
+
+=head2 Using regexps to match output
+
+As shown in most of the scripting examples, the read-to-scalar facility for
+gathering subcommand's output is often used with regular expressions to detect
+stopping points.  This is because subcommand output often arrives in dribbles
+and drabs, often only a character or line at a time.  This output is input for
+the mian program and piles up in variables like the C<$out> and C<$err> in our
+examples.
+
+Regular expressions can be used to wait for appropriate output in several ways.
+The C<cat> example in the previous section demonstrates how to pump() until
+some string appears in the output.  Here's an example that uses C<smb> to fetch
+files from a remote server:
+
+   $h = harness \@smbclient, \$in, \$out ;
+
+   $in = "cd /src\n" ;
+   $h->pump until $out =~ /^smb.*> \Z/m ;
+   die "error cding to /src:\n$out" if $out =~ "ERR" ;
+   $out = '' ;
+
+   $in = "mget *\n" ;
+   $h->pump until $out =~ /^smb.*> \Z/m ;
+   die "error retrieving files:\n$out" if $out =~ "ERR" ;
+
+   $in = "quit\n" ;
    $h->finish ;
 
-You can compile the harness with harness() prior to start()ing, and you
-may omit start() between harness() and pump().  You might want
-to do these things if you compile your harnesses ahead of time.
+Notice that we carefully clear $out after the first command/response cycle?
+That's because IPC::Run does not delete $out when we continue, and we don't
+want to trip over the old output in the second command/response cycle.
 
-You may call timeout() at any time in this process.  If it is called
-before start() (or the first pump(), if start() is omitted), then the
-timer is started just after all the child processes have been fork()ed
-or spawn()ed.
+Say you want to accumulate all the output in $out and analyze it afterwards.
+Perl offers incremental regular expression matching using the C<m//gc> and
+pattern matching idiom and the C<\G> assertion. IPC::Run is careful not to
+disturb the current C<pos()> value for scalars it appends data to, so we could
+modify the above so as not to destroy $out by adding a couple of C</gc>
+modifiers.  The C</g> keeps us from tripping over the previous prompt and the
+C</c> keeps us from resetting the prior match position if the expected prompt
+doesn't materialize immediately:
 
-If you call it once the children have been start()ed, the timeout timer
-is restarted.  So this sequence:
+   $h = harness \@smbclient, \$in, \$out ;
 
-   my $h = harness \@cat, \$in_q, \$out_q, \$err_q ;
-   $h->timeout( 10 ) ;
+   $in = "cd /src\n" ;
+   $h->pump until $out =~ /^smb.*> \Z/mgc ;
+   die "error cding to /src:\n$out" if $out =~ "ERR" ;
+
+   $in = "mget *\n" ;
+   $h->pump until $out =~ /^smb.*> \Z/mgc ;
+   die "error retrieving files:\n$out" if $out =~ "ERR" ;
+
+   $in = "quit\n" ;
+   $h->finish ;
+
+   analyze( $out ) ;
+
+When using this technique, you may want to preallocate $out to have plenty of
+memory or you may find that the act of growing $out each time new input arrives
+causes an O(length($out)^2) slowdown as $out grows.  Say we expect no more than
+10,000 characters of input at the most.  To preallocate memory to $out, do
+something like:
+
+   my $out = "x" x 10_000 ;
+   $out = "" ;
+
+C<perl> will allocate at least 10,000 characters' worth of space, then mark the
+$out as having 0 length without freeing all that yummy RAM.
+
+=head2 Timouts and Timers
+
+More than likely, you don't want your subprocesses to run forever, and
+sometimes it's nice to know that they're going a little slowly.  Timeouts throw
+exceptions after a some time has elapsed, timers merely cause pump() to return
+after some time has elapsed.  Neither is reset/restarted automatically.
+
+Timeout objects are created by calling timeout( $interval ) and passing the
+result to run(), start() or harness().  The timeout period starts ticking just
+after all the child processes have been fork()ed or spawn()ed, and are polled
+for expiration in run(), pump() and finish().  If/when they expire, an
+exception is thrown.  This is typically useful to keep a subprocess from taking
+too long.
+
+If a timeout occurs in run(), all child processes will be terminated and all
+file/pipe/ptty descriptors opened by run() will be closed.  File descriptors
+opened by the parent process and passed in to run() are not closed in this
+event.
+
+If a timeout occurs in pump(), pump_nb(), or finish(), it's up to you to decide
+whether to kill_kill() all the children or to implement some more graceful
+fallback.  No I/O will be closed in pump(), pump_nb() or finish() by such an
+exception (though I/O is often closed down in those routines during the natural
+course of events).
+
+Often an exception is too harsh.  timer( $interval ) creates timer objects that
+merely prevent pump() from blocking forever.  This can be useful for detecting
+stalled I/O or printing a soothing message or "." to pacify an anxious user.
+
+Timeouts and timers can both be restarted at any time using the timer's start()
+method (this is not the start() that launches subprocesses).  To restart a
+timer, you need to keep a reference to the timer:
+
+   ## Start with a nice long timeout to let smbclient connect.  If
+   ## pump or finish take too long, an exception will be thrown.
+
+ my $h ;
+ eval {
+   $h = harness \@smbclient, \$in, \$out, \$err, ( my $t = timeout 30 ) ;
    sleep 11 ;  # No effect: timer not running yet
 
    start $h ;
-   $in_q = "foo\n" ;
-   pump $h until ! length $in_q ;
-   ## 10 (or little more) may pass til this line.
+   $in = "cd /src\n" ;
+   pump $h until ! length $in ;
 
-   $in_q = "bar\n" ;
-   $h->timeout( 1 ) ;
-   ## Timer is now running, but will elapse after 1 second
-   pump $h until ! length $in_q ;
-   ## 1 seconds (or a little more) may pass til this line.
+   $in = "ls\n" ;
+   ## Now use a short timeout, since this should be faster
+   $t->start( 5 ) ;
+   pump $h until ! length $in ;
 
-   $h->timeout( 30 ) ;
+   $t->start( 10 ) ;  ## Give smbclient a little while to shut down.
    $h->finish ;
+ } ;
+ if ( $@ ) {
+   my $x = $@ ;    ## Preserve $@ in case another exception occurs
+   $h->kill_kill ; ## kill it gently, then brutally if need be
+   die $x ;
+ }
 
-The timeout does not include the time it takes to wait for the children
-to exit, either.
+Timeouts and timers are I<not> checked once the subprocesses are shut down;
+they will not expire in the interval between the last valid process and when
+IPC::Run scoops up the processes' result codes, for instance.
 
 =head2 Syntax
 
@@ -825,10 +910,10 @@ use vars qw( $VERSION @ISA @EXPORT_OK %EXPORT_TAGS $debug ) ;
 
 use Exporter ;
 use Fcntl ;
-use POSIX () ;
+use POSIX qw() ;
 use Symbol ;
 
-$VERSION = '0.44' ;
+$VERSION = '0.5' ;
 
 @ISA = qw( Exporter ) ;
 
@@ -867,30 +952,26 @@ require IPC::Run::Timer ;
 use UNIVERSAL qw( isa ) ;
 
 use fields (
-   'IOS',          # Filehandles passed in by caller for us to watch, like
-                   # PIPES except that we perform no management of these,
+   'IOS',          # ARRAY of filehandles passed in by caller for us to watch
+                   # like PIPES except that we perform no management of these,
 		   # just I/O.  These are encapsulated in IPC::Run::IO
 		   # instances.
 
-   'KIDS',         # Child processes
+   'KIDS',         # ARRAY of child processes
 
-   'PIPES',        # Pipes & Pty handles to/from child procs
+   'PIPES',        # ARRAY of Pipes & Pty handles to/from child procs
                    # These are references to entries in @{$_->{OPS}} for @KIDS
 
-   'PTYS',         # A hash of pty nicknames => ( undef or IO::Pty instances ).
+   'PTYS',         # A HASH of pty nicknames => ( undef or IO::Pty instances ).
                    # Elts are undef until _open_pipes() and after _cleanup().
 
-   'TIMERS',       # All timer / timeout objects
+   'TIMERS',       # ARRAY of all timer / timeout objects
 
-   'STATE',        # See constant subs immediately below.
+   'STATE',        # "state" of a harness. See constant subs immediately below.
 
-   'TEMP_FILTERS', # These are filters installed by _open_pipes() and removed
+   'TEMP_FILTERS', # ARRAY of filters installed by _open_pipes() and removed
                    # by _cleanup() to handle I/O to/from handles.
 
-#   'TIMEOUT',      # Master timeout interval
-#
-#   'TIMEOUT_END',  # The end-time of the current timeout interval
-#
    # Bit vectors for select()
    'RIN',
    'WIN',
@@ -973,9 +1054,10 @@ sub _debug {
 
    my $s ;
    my $prefix = join(
-      '',
-      'IPC::Run',
-      ( $$ eq $parent_pid ? () : ( '[', $$, ']' ) ),
+      "",
+      "IPC::Run ",
+      sprintf( "%04d", time - $^T ),
+      ( $$ eq $parent_pid ? () : ( " [", $$, "]" ) ),
       ': ',
       ( $debug > 2 ? ( _map_fds, ' ' ) : () ),
    ) ;
@@ -1051,6 +1133,9 @@ sub _search_path {
 
    if ( $cmd_name =~ /($dirsep)/ ) {
       _debug "'", $cmd_name, "' contains '", $1, "'" ;
+      croak "file not found: $cmd_name"    unless -e $cmd_name ;
+      croak "not a file: $cmd_name"        unless -f $cmd_name ;
+      croak "permission denied: $cmd_name" unless -x $cmd_name ;
       return $cmd_name ;
    }
 
@@ -1058,49 +1143,48 @@ sub _search_path {
       _debug "'", $cmd_name, "' found in cache: '", $cmd_cache{$cmd_name}, "'" ;
       return $cmd_cache{$cmd_name} if -x $cmd_cache{$cmd_name} ;
       _debug "'", $cmd_cache{$cmd_name},"' no longer executable, searching..." ;
+      delete $cmd_cache{$cmd_name} ;
    }
 
    my @searched_in ;
 
-   unless ( exists $cmd_cache{$cmd_name} ) {
-      ## This next bit is Unix specific, unfortunately.
-      ## There's been some conversation about extending File::Spec to provide
-      ## a universal interface to PATH, but I haven't seen it yet.
-      my $re ;
-      for ( $^O ) {
-         if ( /Win32/ )         { $re = qr/;/ }
-         else                   { $re = qr/:/ }
-      }
-   LOOP:
-      for ( split( $re, $ENV{PATH}, -1 ) ) {
-	 $_ = "." unless length $_ ;
-	 push @searched_in, $_ ;
+   ## This next bit is Unix/Win32 specific, unfortunately.
+   ## There's been some conversation about extending File::Spec to provide
+   ## a universal interface to PATH, but I haven't seen it yet.
+   my $re ;
+   for ( $^O ) {
+      if ( $^O =~ /Win32/ )         { $re = qr/;/ }
+      else                          { $re = qr/:/ }
+   }
+LOOP:
+   for ( split( $re, $ENV{PATH}, -1 ) ) {
+      $_ = "." unless length $_ ;
+      push @searched_in, $_ ;
 
-	 my $prospect = File::Spec->catfile( $_, $cmd_name ) ;
-         my @prospects ;
-         ## TODO: Use a better algorithm for finding executables on
-         ## non-Unix.  Maybe defer to system().
-         for ( $^O ) {
-            if ( /Win32/ ) {
-               @prospects = -f $prospect
-                  ? ( $prospect )
-                  : ( $prospect, glob( "$prospect.*" ) )  ;
-            }
-            else {
-               @prospects = ( $prospect ) ;
-            }
-         }
-         for my $found ( @prospects ) {
-            if ( -f $found && -x _ ) {
-	       _debug 'found ', $found ;
-	       $cmd_cache{$cmd_name} = $found ;
-	       last LOOP ;
-	    }
-         }
+      my $prospect = File::Spec->catfile( $_, $cmd_name ) ;
+      my @prospects ;
+      ## TODO: Use a better algorithm for finding executables on
+      ## non-Unix.  Maybe defer to system().
+      if ( $^O =~ /Win32/ ) {
+	 @prospects = -f $prospect
+	    ? ( $prospect )
+	    : ( $prospect, glob( "$prospect.*" ) )  ;
+      }
+      else {
+	 @prospects = ( $prospect ) ;
+      }
+
+      for my $found ( @prospects ) {
+	 if ( -f $found && -x _ ) {
+	    $cmd_cache{$cmd_name} = $found ;
+	    last LOOP ;
+	 }
       }
    }
+
    if ( exists $cmd_cache{$cmd_name} ) {
-      _debug "'", $cmd_name, "' added to cache: '", $cmd_cache{$cmd_name}, "'" ;
+      _debug "'", $cmd_name, "' added to cache: '", $cmd_cache{$cmd_name}, "'"
+         if $debug > 1 ;
       return $cmd_cache{$cmd_name} ;
    }
 
@@ -1140,7 +1224,7 @@ sub _dup2 {
 }
 
 sub _exec {
-   confess 'undef' unless defined $_[0] ;
+   confess 'undef!!' if grep !defined, @_ ;
    exec @_ or croak "$!: exec( " . join( ', ', @_ ) . " )" ;
 }
 
@@ -1153,18 +1237,39 @@ sub _sysopen {
 }
 
 sub _pipe {
+   ## Normal, blocking write for pipes that we read and the child writes,
+   ## since most children expect writes to stdout to block rather than
+   ## do a partial write.
    my ( $r, $w ) = POSIX::pipe ;
    croak "$!: pipe()" unless $r ;
    _debug "pipe() = ( $r, $w ) " if $debug > 2 ;
    return ( $r, $w ) ;
 }
 
+sub _pipe_nb {
+   ## For pipes that we write, unblock the write side, so we can fill a buffer
+   ## and continue to select().
+   ## Contributed by Borislav Deianov <borislav@ensim.com>, with minor
+   ## bugfix on fcntl result by me.
+   local ( *R, *W ) ;
+   my $f = pipe( R, W ) ;
+   croak "$!: pipe()" unless defined $f ;
+   my ( $r, $w ) = ( fileno R, fileno W ) ;
+   _debug "pipe() = ( $r, $w )" if $debug > 2 ;
+   # POSIX::fcntl doesn't take fd numbers, so gotta use Perl's and
+   # then _dup the originals (which get closed on leaving this block
+   my $fres = fcntl( W, &F_SETFL, O_WRONLY | O_NONBLOCK ) ;
+   croak "$!: fcntl( $w, F_SETFL, O_NONBLOCK )" unless $fres ;
+   _debug "fcntl( $w, F_SETFL, O_NONBLOCK )" if $debug > 2 ;
+   return ( _dup( $r ), _dup( $w ) ) ;
+}
 
 sub _pty {
    require IO::Pty ;
    my $pty = IO::Pty->new() ;
-   $pty->autoflush() ;
    croak "$!: pty ()" unless $pty ;
+   $pty->autoflush() ;
+   $pty->blocking( 0 ) or croak "$!: pty->blocking ( 0 )" ;
    _debug "pty() = ", $pty->fileno if $debug > 2 ;
    return $pty ;
 }
@@ -1202,14 +1307,167 @@ You may think of C<run( ... )> as being like
    start( ... )->finish() ;
 
 , though there is one subtle difference: run() does not
-set \$input_scalars to '' like finish() does.
+set \$input_scalars to '' like finish() does.  If an exception is thrown
+from run(), all children will be killed off "gently", and then "annihilated"
+if they do not go gently (in to that dark night. sorry).
+
+If any exceptions are thrown, this does a L</kill_kill> before propogating
+them.
 
 =cut
 
 sub run {
-   my IPC::Run $self = start( @_ ) ;
-   $self->{clear_ins} = 0 ;
-   $self->finish ;
+   my IPC::Run $self = start( @_ );
+   my $r = eval {
+      $self->{clear_ins} = 0 ;
+      $self->finish ;
+   } ;
+   if ( $@ ) {
+      my $x = $@ ;
+      $self->kill_kill ;
+      die $x ;
+   }
+   return $r ;
+}
+
+
+=item signal
+
+   ## To send it a specific signal by name ("USR1"):
+   signal $h, "USR1" ;
+   $h->signal ( "USR1" ) ;
+
+If $signal is provided and defined, sends a signal to all child processes.  Try
+not to send numeric signals, use C<"KILL"> instead of C<9>, for instance.
+Numeric signals aren't portable.
+
+Throws an exception if $signal is undef.
+
+This will I<not> clean up the harness, C<finish> it if you kill it.
+
+Normally TERM kills a process gracefully (this is what the command line utility
+C<kill> does by default), INT is sent by one of the keys C<^C>, C<Backspace> or
+C<E<lt>DelE<gt>>, and C<QUIT> is used to kill a process and make it coredump.
+
+The C<HUP> signal is often used to get a process to "restart", rereading 
+config files, and C<USR1> and C<USR2> for really application-specific things.
+
+Often, running C<kill -l> (that's a lower case "L") on the command line will
+list the signals present on your operating system.
+
+B<WARNING>: The signal subsystem is not at all portable.  We *may* offer
+to simulate C<TERM> and C<KILL> on some operatiing systems, submit code
+to me if you want this.
+
+=cut
+
+sub signal {
+   my IPC::Run $self = shift ;
+
+   $self->_kill_kill_kill_pussycat_kill unless @_ ;
+
+   Carp::cluck "Ignoring extra parameters passed to kill()" if @_ > 1 ;
+
+   my ( $signal ) = @_ ;
+   croak "Undefined signal passed to signal" unless defined $signal ;
+   for ( grep $_->{PID} && ! defined $_->{RESULT}, @{$self->{KIDS}} ) {
+      _debug "sending $signal to $_->{PID}" ;
+      kill $signal, $_->{PID} or _debug "$! sending $signal to $_->{PID}" ;
+   }
+   
+   return ;
+}
+
+
+=item kill_kill
+
+   ## To kill off a process:
+   $h->kill_kill ;
+   kill_kill $h ;
+
+   ## To specify the grace period other than 30 seconds:
+   kill_kill $h, grace => 5 ;
+
+   ## To send QUIT instead of KILL if a process refuses to die:
+   kill_kill $h, coup_d_grace => "QUIT" ;
+
+Sends a C<TERM>, waits for all children to exit for up to 30 seconds, then
+sends a C<KILL> to any that survived the C<TERM>.
+
+Will wait for up to 30 more seconds for the OS to sucessfully C<KILL> the
+processes.
+
+The 30 seconds may be overriden by setting the C<grace> option, this
+overrides both timers.
+
+The harness is then cleaned up.
+
+The doubled name indicates that this function may kill again and avoids
+colliding with the core Perl C<kill> function.
+
+Returns a 1 if the C<TERM> was sufficient, or a 0 if C<KILL> was 
+required.  Throws an exception if C<KILL> did not permit the children
+to be reaped.
+
+B<NOTE>: The grace period is actually up to 1 second longer than that
+given.  This is because the granularity of C<time> is 1 second.  Let me
+know if you need finer granularity, we can leverage Time::HiRes here.
+
+=cut
+
+sub kill_kill {
+   my IPC::Run $self = shift ;
+
+   my %options = @_ ;
+   my $grace = $options{grace} ;
+   $grace = 30 unless defined $grace ;
+   ++$grace ; ## Make grace time a _minimum_
+
+   my $coup_d_grace = $options{coup_d_grace} ;
+   $coup_d_grace = "KILL" unless defined $coup_d_grace ;
+
+   delete $options{$_} for qw( grace coup_d_grace ) ;
+   Carp::cluck "Ignoring unknown options for kill_kill: ",
+       join " ",keys %options
+       if keys %options ;
+
+   $self->signal( "TERM" ) ;
+
+   my $quitting_time = time + $grace ;
+   my $delay = 0.01 ;
+   my $accum_delay ;
+
+   my $have_killed_before ;
+
+   while () {
+      ## delay first to yeild to other processes
+      select undef, undef, undef, $delay ;
+      $accum_delay += $delay ;
+
+      $self->reap_nb ;
+      last unless $self->_running_kids ;
+
+      if ( $accum_delay >= $grace*0.8 ) {
+         ## No point in checking until delay has grown some.
+         if ( time >= $quitting_time ) {
+	    if ( ! $have_killed_before ) {
+	       $self->signal( $coup_d_grace ) ;
+	       $have_killed_before = 1 ;
+	       $quitting_time += $grace ;
+	       $delay = 0.01 ;
+	       $accum_delay = 0 ;
+	       next ;
+	    }
+	    croak "Unable to reap all children, even after KILLing them"
+	 }
+      }
+
+      $delay *= 2 ;
+      $delay = 0.5 if $delay >= 0.5 ;
+   }
+
+   $self->_cleanup ;
+   return $have_killed_before ;
 }
 
 
@@ -1270,7 +1528,6 @@ sub harness {
    my $cur_kid ;            # references kid or handle being parsed
 
    my $assumed_fd    = 0 ;  # fd to assume in succinct mode (no redir ops)
-   my $kid_num       = 0 ;  # 1... is which kid we're parsing
    my $handle_num    = 0 ;  # 1... is which handle we're parsing
 
    my IPC::Run $self ;
@@ -1316,11 +1573,12 @@ sub harness {
 	 if ( ref eq 'ARRAY' || ( ! $cur_kid && ref eq 'CODE' ) ) {
 	    croak "Process control symbol ('|', '&') missing" if $cur_kid ;
 	    $cur_kid = {
-	       TYPE => 'cmd',
-	       VAL  => $_,
-	       NUM  => ++$kid_num,
-	       OPS  => [],
-	       PID  => '',
+	       TYPE   => 'cmd',
+	       VAL    => $_,
+	       NUM    => @{$self->{KIDS}} + 1,
+	       OPS    => [],
+	       PID    => '',
+	       RESULT => undef,
 	    } ;
 	    push @{$self->{KIDS}}, $cur_kid ;
 	    $succinct = 1 ;
@@ -1398,7 +1656,9 @@ sub harness {
 	    unless ( length $source ) {
 	       if ( ! $succinct ) {
 		  push @filters, shift @args
-		     while @args > 1 && ref $args[1] ;
+		     while @args > 1
+		         && ref $args[1]
+			 && ! isa $args[1], "IPC::Run::Timer" ;
 	       }
 	       $source = shift @args ;
 	       croak "'$_' missing a source" if _empty $source ;
@@ -1413,7 +1673,7 @@ sub harness {
 	       $type, $kfd, $pty_id, $source, @filters
 	    ) ;
 
-	    if (  ( ref $source eq 'GLOB' || isa( $source, 'IO::Handle' ) )
+	    if (  ( ref $source eq 'GLOB' || isa $source, 'IO::Handle' )
 	       && $type !~ /^<p(ty<|ipe)$/
 	    ) {
 	       $pipe->{DONT_CLOSE} = 1 ; ## this FD is not closed by us.
@@ -1462,7 +1722,9 @@ sub harness {
 	       if ( ! $succinct ) {
 		  ## unshift...shift: '>' filters source...sink left...right
 		  unshift @filters, shift @args
-		     while @args > 1 && ref $args[1] ;
+		     while @args > 1
+		         && ref $args[1]
+			 && ! isa $args[1], "IPC::Run::Timer" ;
 	       }
 
 	       $dest = shift @args ;
@@ -1622,7 +1884,7 @@ sub _open_pipes {
    ## parent-side actions.
    for my $kid ( @{$self->{KIDS}} ) {
       unless ( ref $kid->{VAL} eq 'CODE' ) {
-	 $kid->{PATH} = _search_path( $kid->{VAL}->[0] ) ;
+	 $kid->{PATH} = _search_path $kid->{VAL}->[0] ;
       }
       if ( defined $pipe_read_fd ) {
 	 unshift @{$kid->{OPS}}, {
@@ -1665,7 +1927,7 @@ sub _open_pipes {
 			" from SCALAR"
 		     ) if $debug > 2 ;
 
-                     ( $op->{TFD}, $op->{FD} ) = _pipe ;
+                     ( $op->{TFD}, $op->{FD} ) = _pipe_nb ;
 		     push @close_on_fail, $op->{KFD}, $op->{FD} ;
 
 		     my $s = '' ;
@@ -1675,7 +1937,7 @@ sub _open_pipes {
 		     _debug(
 		     'kid ', $kid->{NUM}, ' to read ', $op->{KFD}, ' from CODE'
 		     ) if $debug > 1 ;
-		     ( $op->{TFD}, $op->{FD} ) = _pipe ;
+		     ( $op->{TFD}, $op->{FD} ) = _pipe_nb ;
 		     push @close_on_fail, $op->{KFD}, $op->{FD} ;
 		     my $s = '' ;
 		     $op->{KIN_REF} = \$s ;
@@ -1695,7 +1957,7 @@ sub _open_pipes {
 		  'kid to read ', $op->{KFD},
 		  ' from a pipe harness() opens and returns',
 	       ) if $debug > 1 ;
-	       my ( $r, $w ) = _pipe() ;
+	       my ( $r, $w ) = _pipe ;
 	       open( $op->{SOURCE}, ">&=$w" )
 		  or croak "$! on write end of pipe" ;
 
@@ -1858,7 +2120,7 @@ sub _open_pipes {
 	 push @errs, $@ ;
 	 _debug 'caught ', $@ ;
       }
-   } # end for ( KIDS )
+   }
    if ( @errs ) {
       for ( @close_on_fail ) {
 	 _close( $_ ) ;
@@ -1874,7 +2136,13 @@ sub _open_pipes {
 
    ## give all but the last child all of the output file descriptors
    ## These will be reopened (and thus rendered useless) if the child
-   ## dup2s on to these descriptors, since we unshift these.
+   ## dup2s on to these descriptors, since we unshift these.  This way
+   ## passed-in parameters override default.
+   ## NOTE: This sharing of OPS among kids means that we can't easily put
+   ## a kid number in each OPS structure to ping the kid when all ops
+   ## have closed (when $self->{PIPES} has emptied).  This means that we
+   ## need to scan the KIDS whenever @{$self->{PIPES}} is empty to see
+   ## if there any of them are still alive.
    for ( my $num = 0 ; $num < $#{$self->{KIDS}} ; ++$num ) {
       for ( reverse @output_fds_accum ) {
          next unless defined $_ ;
@@ -1967,7 +2235,10 @@ sub _open_pipes {
 	       return undef ;
 	    }
 
+            ## Protect the position so /.../g matches may be used.
+            my $pos = pos $$out_ref ;
 	    $$out_ref .= $in ;
+	    pos( $$out_ref ) = $pos ;
 	    return 1 ;
 	 } ;
 	 ## Input filters are the last filters
@@ -2045,7 +2316,7 @@ sub close_terminal {
 }
 
 
-sub _do_kid {
+sub _do_kid_and_exit {
    my IPC::Run $self = shift ;
    my ( $kid ) = @_ ;
 
@@ -2125,6 +2396,7 @@ sub _do_kid {
    }
 
    if ( ref $kid->{VAL} eq 'CODE' ) {
+      POSIX::close( $debug_fd ) if defined $debug_fd ;
       $kid->{VAL}->() ;
       exit 0 ;
    }
@@ -2204,6 +2476,8 @@ sub start {
    local $debug = $self->{debug} if defined $self->{debug} ;
    _debug "** starting" ;
 
+   $_->{RESULT} = undef for @{$self->{KIDS}} ;
+
    ## Assume we're not being called from &run.  It will correct our
    ## assumption if need be.  This affects whether &_select_loop clears
    ## input queues to '' when they're empty.
@@ -2236,14 +2510,23 @@ sub start {
    }
    if ( ! @errs ) {
       for my $kid ( @{$self->{KIDS}} ) {
+         $kid->{RESULT} = undef ;
+	 _debug "child: ",
+	    ref( $kid->{VAL} ) eq "CODE"
+	    ? "CODE ref"
+	    : (
+	       "`",
+	       join( " ", map /[^\w-.]/ ? "'$_'" : $_, @{$kid->{VAL}} ),
+	       "`"
+	    ) ;
 	 eval {
 	    croak "simulated failure of fork"
 	       if $self->{_simulate_fork_failure} ;
 	    unless ( $^O =~ /^(?:os2|MSWin32)$/ ) {
 	       $kid->{PID} = fork() ;
-	       $self->_do_kid( $kid ) unless $kid->{PID} ;
 	       croak "$! during fork" unless defined $kid->{PID} ;
-	       _debug "fork() = ", $kid->{PID} ;
+	       $self->_do_kid_and_exit( $kid ) unless $kid->{PID} ;
+	       _debug "fork() = ", $kid->{PID} if $debug > 1 ;
 	    }
 	    else {
 ## TODO: Test and debug spawing code.  Someday.
@@ -2341,10 +2624,28 @@ confess "gak!" unless defined $self->{PIPES} ;
 }
 
 
+sub adopt {
+   ## NOT FUNCTIONAL YET, NEED TO CLOSE FDS BETTER IN CHILDREN.  SEE
+   ## t/adopt.t for a test suite.
+   my IPC::Run $self = shift ;
+
+   for my $adoptee ( @_ ) {
+      push @{$self->{IOS}},    @{$adoptee->{IOS}} ;
+      ## NEED TO RENUMBER THE KIDS!!
+      push @{$self->{KIDS}},   @{$adoptee->{KIDS}} ;
+      push @{$self->{PIPES}},  @{$adoptee->{PIPES}} ;
+      $self->{PTYS}->{$_} = $adoptee->{PTYS}->{$_}
+	 for keys %{$adoptee->{PYTS}} ;
+      push @{$self->{TIMERS}}, @{$adoptee->{TIMERS}} ;
+      $adoptee->{STATE} = _finished ;
+   }
+}
+
+
 sub _clobber {
    my IPC::Run $self = shift ;
    my ( $file ) = @_ ;
-   _debug_fd( "closing", $file ) ;
+   _debug_fd( "closing", $file ) if $debug > 1 ;
    my $doomed = $file->{FD} ;
    my $dir = $file->{TYPE} =~ /^</ ? 'WIN' : 'RIN' ;
    vec( $self->{$dir}, $doomed, 1 ) = 0 ;
@@ -2381,10 +2682,8 @@ sub _select_loop {
 
    my $io_occurred ;
 
-   croak "process ended prematurely" unless @{$self->{PIPES}} ;
-
 SELECT:
-   while ( @{$self->{PIPES}} ) {
+   while ( $self->pumpable ) {
       last if $io_occurred && $self->{break_on_io} ;
 
       if ( @{$self->{TIMERS}} ) {
@@ -2429,7 +2728,10 @@ SELECT:
       }
 
       ## _do_filters may have closed our last fd.
-      last unless @{$self->{PIPES}} ;
+      last unless $self->pumpable ;
+
+      ## Make sure we don't block forever in select()
+      $timeout = 1 if ! defined $timeout && ! ( @{$self->{PIPES}} - $paused ) ;
 
       if ( $debug > 2 ) {
          my $map = join(
@@ -2504,7 +2806,7 @@ SELECT:
 	    }
 
 	    _debug_fd( "filtering data from", $pipe ) if $debug > 2 ;
-confess "fooy" unless isa( $pipe, "IPC::Run::IO" ) ;
+confess "phooey" unless isa( $pipe, "IPC::Run::IO" ) ;
 	    $io_occurred = 1 if $pipe->_do_filters( $self ) ;
 
 	    next FILE unless defined $pipe->{FD} ;
@@ -2536,7 +2838,7 @@ confess "fooy" unless isa( $pipe, "IPC::Run::IO" ) ;
       }
    }
 
-   return scalar( @{$self->{PIPES}} ) ;
+   return ;
 }
 
 
@@ -2567,7 +2869,8 @@ sub _cleanup {
 	    _close( $op->{TFD} ) if defined $op->{TFD} ;
 	 }
       }
-      else {
+      elsif ( ! defined $kid->{RESULT} ) {
+Carp::cluck if $debug ;
 	 _debug 'reaping child ', $num++, ' (pid ', $kid->{PID}, ')' ;
 	 my $pid = waitpid $kid->{PID}, 0 ;
 	 $kid->{RESULT} = $? ;
@@ -2600,16 +2903,16 @@ sub _cleanup {
    $h->pump ;
 
 Pump accepts a single parameter harness.  It blocks until it delivers some
-input or recieves some output.  It returns TRUE if there
-is still input or output to be done, FALSE otherwise.
+input or recieves some output.  It returns TRUE if there is still input or
+output to be done, FALSE otherwise.
 
 pump() will automatically call start() if need be, so you may call harness()
 then proceed to pump() if that helps you structure your application.
 
-Calling pump() when there is no more i/o do be done causes a "process ended
-prematurely" exception to be thrown.  This allows fairly simple scripting
-of external applications without having to add lots of error handling code
-at each step of the script:
+If pump() is called after all harnessed activities have completed, a "process
+ended prematurely" exception to be thrown.  This allows for simple scripting
+of external applications without having to add lots of error handling code at
+each step of the script:
 
    $h = harness \@smbclient, \$in_q, \$out_q, $err_q ;
 
@@ -2626,7 +2929,6 @@ at each step of the script:
 
    warn $err_q if $err_q ;
 
-
 =cut
 
 
@@ -2640,20 +2942,23 @@ sub pump {
 
    _debug "** pumping" ;
 
-   my $r = eval {
+#   my $r = eval {
       $self->start if $self->{STATE} < _started ;
+      croak "process ended prematurely" unless $self->pumpable ;
+
       $self->{auto_close_ins} = 0 ;
-      $self->{break_on_io} = 1 ;
+      $self->{break_on_io}    = 1 ;
       $self->_select_loop ;
-   } ;
-   if ( $@ ) {
-      my $x = $@ ;
-      _debug $x if $x ;
-      eval { $self->_cleanup } ;
-      warn $@ if $@ ;
-      die $x ;
-   }
-   return $r ;
+      return $self->pumpable ;
+#   } ;
+#   if ( $@ ) {
+#      my $x = $@ ;
+#      _debug $x if $x ;
+#      eval { $self->_cleanup } ;
+#      warn $@ if $@ ;
+#      die $x ;
+#   }
+#   return $r ;
 }
 
 
@@ -2684,14 +2989,69 @@ sub pump_nb {
 =item pumpable
 
 Returns TRUE if calling pump() won't throw an immediate "process ended
-prematurely" exception.  Reflects the value returned from the last call
-to pump().
+prematurely" exception.  This means that there are open I/O channels or
+active processes.
 
 =cut
 
 sub pumpable {
    my IPC::Run $self = shift ;
-   return scalar @{$self->{PIPES}} ;
+   return 1 if @{$self->{PIPES}} ;
+   $self->reap_nb ;
+   return $self->_running_kids ;
+}
+
+
+sub _running_kids {
+   my IPC::Run $self = shift ;
+   return grep
+      defined $_->{PID} && ! defined $_->{RESULT},
+      @{$self->{KIDS}} ;
+}
+
+
+=item reap_nb
+
+Attempts to reap child processes, but does not block.
+
+Does not currently take any parameters, one day it will allow specific
+children to be reaped.
+
+Only call this from a signal handler if your C<perl> is recent enough
+to have safe signal handling (5.6.1 did not, IIRC, but it was beign discussed
+on perl5-porters).  Calling this (or doing any significant work) in a signal
+handler on older C<perl>s is asking for seg faults.
+
+=cut
+
+sub reap_nb {
+   my IPC::Run $self = shift ;
+
+   ## No more pipes, look to see if all the kids yet live, reaping those
+   ## that haven't.  I'd use $SIG{CHLD}/$SIG{CLD}, but that's broken
+   ## on older (SYSV) platforms and perhaps less portable than waitpid().
+   ## This could be slow with a lot of kids, but that's rare and, well,
+   ## a lot of kids is slow in the first place.
+   ## Oh, and this keeps us from reaping other children the process
+   ## may have spawned.
+   for my $kid ( @{$self->{KIDS}} ) {
+      next if ! $kid->{PID} || defined $kid->{RESULT} ;
+
+      my $pid = waitpid $kid->{PID}, POSIX::WNOHANG() ;
+      unless ( $pid ) {
+	 _debug "$kid->{PID} still running" ;
+	 next ;
+      }
+
+      if ( $pid < 0 ) {
+         _debug "$kid $kid->{RESULT} No such process: $kid->{PID}\n" ;
+         $_->{RESULT} = "unknown result, unknown PID" ;
+      }
+      confess "waitpid returned the wrong PID: $pid instead of $kid->{PID}"
+         unless $pid = $kid->{PID} ;
+      _debug "$kid->{PID} returned $?\n" ;
+      $kid->{RESULT} = $? ;
+   }
 }
 
 
@@ -2701,12 +3061,20 @@ This must be called after the last start() or pump() call for a harness,
 or your system will accumulate defunct processes and you may "leak"
 file descriptors.
 
-finish() returns TRUE if all children returned 0 (and were not signaled and
-did not coredump, ie ! $?), and FALSE otherwise (this
-is like run(), and the opposite of system()).
+finish() returns TRUE if all children returned 0 (and were not signaled and did
+not coredump, ie ! $?), and FALSE otherwise (this is like run(), and the
+opposite of system()).
 
 Once a harness has been finished, it may be run() or start()ed again,
 including by pump()s auto-start.
+
+If this throws an exception rather than a normal exit, the harness may
+be left in an unstable state, it's best to kill the harness to get rid
+of all the child processes, etc.
+
+Specifically, if a timeout expires in finish(), finish() will not
+kill all the children.  Call C<<$h->kill_kill>> in this case if you care.
+This differs from the behavior of L</run>.
 
 =cut
 
@@ -2719,19 +3087,15 @@ sub finish {
 
    _debug "** finishing" ;
 
-   eval {
-      $self->{non_blocking} = 0 ;
-      $self->{auto_close_ins} = 1 ;
-      $self->{break_on_io} = 0 ;
-      # We don't alter $self->{clear_ins}, start() and run() control it.
+   $self->{non_blocking}   = 0 ;
+   $self->{auto_close_ins} = 1 ;
+   $self->{break_on_io}    = 0 ;
+   # We don't alter $self->{clear_ins}, start() and run() control it.
 
-      $self->_select_loop( $options ) if @{$self->{PIPES}} ;
-   } ;
-   my $x = $@ ;
-   _debug $x if $x ;
-   eval { $self->_cleanup } ;
-   warn $@ if $@ ;
-   die $x if $x ;
+   while ( $self->pumpable ) {
+      $self->_select_loop( $options ) ;
+   }
+   $self->_cleanup ;
 
    return ! $self->full_result ;
 }
@@ -2866,8 +3230,8 @@ sub full_results {
 ## Filter Scaffolding
 ##
 use vars (
-'$filter_op',        ## The op running a filter chain right now
-'$filter_num'        ## Which filter is being run right now.
+   '$filter_op',        ## The op running a filter chain right now
+   '$filter_num',       ## Which filter is being run right now.
 ) ;
 
 ##
@@ -3126,7 +3490,7 @@ sub new_string_sink {
 #   ## one second less then the timeout period.
 #   ++$self->{TIMEOUT_END} if $self->{TIMEOUT} ;
 #}
-#
+
 =item io
 
 Takes a filename or filehandle, a redirection operator, optional filters,
@@ -3467,13 +3831,14 @@ $kid->abort(), $kid->kill(), $kid->signal( $num_or_name ).
 Write tests for /(full_)?results?/ subs.
 
 Currently, pump() and run() only work on systems where select() works on the
-filehandles returned by pipe().  This does *not* include Win32.  I'd
-like to rectify that, suggestions and patches welcome.
+filehandles returned by pipe().  This does *not* include ActiveState on Win32,
+although it does work on cygwin under Win32 (thought the tests whine a bit).
+I'd like to rectify that, suggestions and patches welcome.
 
 Likewise start() only fully works on fork()/exec() machines (well, just
 fork() if you only ever pass perl subs as subprocesses).  There's
 some scaffolding for calling Open3::spawn_with_handles(), but that's
-not that useful with limited select().
+untested, and not that useful with limited select().
 
 Support for C<\@sub_cmd> as an argument to a command which
 gets replaced with /dev/fd or the name of a temporary file containing foo's
@@ -3482,7 +3847,8 @@ output.  This is like <(sub_cmd ...) found in bash and csh (IIRC).
 Allow multiple harnesses to be combined as independant sets of processes
 in to one 'meta-harness'.
 
-Allow a harness to be passed in place of an \@cmd.
+Allow a harness to be passed in place of an \@cmd.  This would allow
+multiple harnesses to be aggregated.
 
 Ability to add external file descriptors w/ filter chains and endpoints.
 
@@ -3491,6 +3857,59 @@ Ability to add timeouts and timing generators (i.e. repeating timeouts).
 High resolution timeouts.
 
 =head1 LIMITATIONS
+
+Requires a system that supports C<waitpid( $pid, WNOHANG )> so it can tell if a
+child process is still running.
+
+PTYs don't seem to be non-blocking on some versions of Solaris. Here's a
+test script contributed by Borislav Deianov <borislav@ensim.com> to see
+if you have the problem.  If it dies, you have the problem.
+
+   #!/usr/bin/perl
+
+   use IPC::Run qw(run);
+   use Fcntl;
+   use IO::Pty;
+
+   sub makecmd {
+       return ['perl', '-e', 
+	       '<STDIN>, print "\n" x '.$_[0].'; while(<STDIN>){last if /end/}'];
+   }
+
+   #pipe R, W;
+   #fcntl(W, F_SETFL, O_NONBLOCK);
+   #while (syswrite(W, "\n", 1)) { $pipebuf++ };
+   #print "pipe buffer size is $pipebuf\n";
+   my $pipebuf=4096;
+   my $in = "\n" x ($pipebuf * 2) . "end\n";
+   my $out;
+
+   $SIG{ALRM} = sub { die "Never completed!\n" } ;
+
+   print "reading from scalar via pipe...";
+   alarm( 2 ) ;
+   run(makecmd($pipebuf * 2), '<', \$in, '>', \$out);
+   alarm( 0 );
+   print "done\n";
+
+   print "reading from code via pipe... ";
+   alarm( 2 ) ;
+   run(makecmd($pipebuf * 3), '<', sub { $t = $in; undef $in; $t}, '>', \$out);
+   alarm( 0 ) ;
+   print "done\n";
+
+   $pty = IO::Pty->new();
+   $pty->blocking(0);
+   $slave = $pty->slave();
+   while ($pty->syswrite("\n", 1)) { $ptybuf++ };
+   print "pty buffer size is $ptybuf\n";
+   $in = "\n" x ($ptybuf * 3) . "end\n";
+
+   print "reading via pty... ";
+   alarm( 2 ) ;
+   run(makecmd($ptybuf * 3), '<pty<', \$in, '>', \$out);
+   alarm(0);
+   print "done\n";
 
 No support for ';', '&&', '||', '{ ... }', etc: use perl's, since run()
 returns TRUE when the command exits with a 0 result code.
@@ -3511,13 +3930,51 @@ No support for C<cd>, C<setenv>, or C<export>: do these in an init() sub
 Timeout calculation does not allow absolute times, or specification of
 days, months, etc.
 
+B<WARNING:> Function coprocesses (C<run \&foo, ...>) suffer from two
+limitations.  The first is that it is difficult to close all filehandles the
+child inherits from the parent, since there is no way to scan all open
+FILEHANDLEs in Perl and it both painful and a bit dangerous to close all open
+file descriptors with C<POSIX::close()>. Painful because we can't tell which
+fds are open at the POSIX level, either, so we'd have to scan all possible fds
+and close any that we don't want open (normally C<exec()> closes any
+non-inheritable but we don't C<exec()> for &sub processes.
+
+The second problem is that Perl's DESTROY subs and other on-exit cleanup gets
+run in the child process.  If objects are instantiated in the parent before the
+child is forked, the the DESTROY will get run once in the parent and once in
+the child.  The workaround for this is to do something a C<kill $$, 0>,
+C<POSIX::_exit> or an C<exec $^X, "-e1"> (which execs perl on a trivial
+program).  The problem with the workaround is that this prevents DESTROY and
+on-exit cleanup from being called on any objects created in the child since the
+C<fork>.  The C<kill> technique is not available on all systems.  I haven't
+tried the C<POSIX::_exit> technique or the C<exec $^X, "-e1"> techniques.  Let
+me know what works for you.  This is why I don't have IPC::Run do this for you.
+It's "mostly safe" since child coprocesses are often simple, but
+
+=head1 TODO
+
+=over
+
+=item Allow one harness to "adopt" another:
+
+   $new_h = harness \@cmd2 ;
+   $h->adopt( $new_h ) ;
+
+=item Close all filehandles not explicitly marked to stay open.
+
+The problem with this one is that there's no good way to scan all open
+FILEHANDLEs in Perl, yet you don't want child processes inheriting handles
+willy-nilly.
+
+=back
+
 =head1 INSPIRATION
 
 Well, select() and waitpid() badly needed wrapping, and open3() isn't
 open-minded enough for me.
 
-API inspired by a message Russ Allbery sent to perl5-porters, which
-included:
+The shell-like API inspired by a message Russ Allbery sent to perl5-porters,
+which included:
 
    I've thought for some time that it would be
    nice to have a module that could handle full Bourne shell pipe syntax

@@ -10,7 +10,7 @@ use strict ;
 
 use Test ;
 
-use IPC::Run ;
+use IPC::Run qw( run ) ;
 use IPC::Run::Timer qw( :all ) ;
 use UNIVERSAL qw( isa ) ;
 
@@ -121,6 +121,14 @@ sub { ok( !  $t->check( 3 ) ) },
 sub { ok( !! $t->is_expired ) },
 sub { ok( !  $t->is_running ) },
 sub { ok( !  $t->is_reset   ) },
+
+sub {
+   my $got = eval {
+      run [$^X, '-e', 'sleep 3'], timeout 1 ;
+      1 ;
+   } ;
+   ok $got || 0, 0, "timer firing in run()" ;
+},
 
 ) ;
 

@@ -4,27 +4,28 @@
 
 use strict ;
 
-use IPC::Run qw( start pump finish ) ;
+use IPC::Run qw( start pump finish timeout ) ;
+
+$IPC::Run::debug = 10 ;
 
 my ( $in, $out ) ;
+
+die "usage: runsu <user> <password>" unless @ARGV ;
 
 my $user = @ARGV > 1 ? shift : $ENV{USER} || $ENV{USERNAME} ;
 my $passwd = shift ;
 
 my $h = start(
    [qw(su - ), $user], '<pty<', \$in, '>pty>', \$out,
-   {
-#      debug => 2,
-      timeout => 5,
-   }
+      timeout( 5 ),
 ) ;
 
 pump $h until $out =~ /^password/im ;
 
 $in = "$passwd\n" ;
 
-## Assume atomic line writes
-## and a non-alpha-num-underscore last char in the prompt.
+## Assume atomic prompt writes
+## and that a non-word is the last char in the prompt.
 $out = '' ;
 pump $h until $out =~ /([^\r\n\w]\s*)(?!\n)$/ ;
 my $prompt = $1 ;

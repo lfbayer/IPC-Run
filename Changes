@@ -1,5 +1,52 @@
 Revision history for Perl extension IPC::Run
 
+0.5 Sat Nov 10 21:32:58 EST 2001
+   - confess() when undef passed to _exec()
+   - Cleaned up some POD and code comments.
+   - Added patch to make the write side of pipes & ptys that IPC::Run must
+     write to be non-blocking. Added a test for pipes, but Boris reports that
+     Solaris 8 something seems to still block in the pty case, though Linux
+     does not, so I did not add a test for that case.  Probably should add one
+     and complain bitterly if it fails (rather than actually failing the tests)
+     and ptys are used.  Patch from Borislav Deianov
+     <borislav@users.sourceforge.net>.
+   - Added a patch to invalidate the search path cache if the file is no longer
+     executable, also from Borislav Deianov <borislav@users.sourceforge.net>
+   - Started implementation of an adopt() external call that would let you
+     aggregate harnesses, and a t/adopt.t, but different children need to
+     properly close all FDs: they're inheriting each other's FDs and not
+     properly closing them.
+   - Close $debug_fd in &sub coprocesses.
+   - Document the problems with &sub coprocesses.
+   - Fixed fork error return detection to actually work, spotted by Dave
+     Mitchell <davem@fdgroup.co.uk>.
+   - Give errors if a path with a directory separator is passed in if the
+     indicated filename does not exist, is not a file, or is not executable.
+     They're unixish errors, but hey...
+   - Allowed harness \@cmd, '>', $foo, timeout 10 ; to parse (it was mistakenly
+     thinking I wanted to send output to the IPC::Run::Timer created by
+     timeout().
+   - pumpable() now returns true if there are any kids left alive, so that
+     timers may continue to run.
+   - A timeout of 1 second is forced if there are no I/O pipes left open, so
+     that the select loop won't hang in select() if there is no I/O to do.
+     Perhaps should only do that if there are timers.
+   - Added a signal() to send specified signals to processes.  Chose this over
+     the more traditional Unix kill() to avoid people thinking that kill()
+     should kill off processes.
+   - Added kill_kill() which does kill off processes and clean up the harness.
+     Sends TERM then (if need be) waits and sends KILL.
+   - timeouts now work.
+   - Removed eval{}s from a few subs, we were being over protective.
+   - Preserve pos() across updates to scalars we append to, so m//g
+     matches will work.
+   - Cleaned up the examples/
+   - Added abuse/ for (mostly user contributed) scripts that I can use as
+     a manual regression test.  Most/all are reflected in t/*.t, but not
+     verbatim, so it's good to have to originals around in case they
+     happen to trigger something t/*.t miss.
+   - Cleaned up SYNOPSIS a bit: it was too scary.  Still is, but less so.
+
 0.44 Mon Oct  2 17:20:29 EDT 2000
    - Commented out all code dealing with select()'s exception file descriptor
      mask.  Exceptions are vaguely defined and until somebody asks for them

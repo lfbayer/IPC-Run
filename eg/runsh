@@ -4,16 +4,14 @@
 
 use strict ;
 
-use IPC::Run qw( start pump finish ) ;
+use IPC::Run qw( start pump finish timeout ) ;
 
 my ( $in, $out, $err ) ;
 
 my $h = start(
    [qw(sh -login -i )], \$in, \$out, \$err,
-   {
       debug => 0,
-      timeout => 5,
-   }
+      timeout( 5 ),
 ) ;
 
 ## The first thing we do is to convert the user's prompt.  Normally, we would

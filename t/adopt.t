@@ -2,7 +2,7 @@
 
 =head1 NAME
 
-pump.t - Test suite for IPC::Run::run, etc.
+adopt.t - Test suite for IPC::Run::adopt
 
 =cut
 
@@ -10,7 +10,7 @@ use strict ;
 
 use Test ;
 
-use IPC::Run qw( start pump finish timeout ) ;
+use IPC::Run qw( start pump finish ) ;
 use UNIVERSAL qw( isa ) ;
 
 ##
@@ -18,16 +18,19 @@ use UNIVERSAL qw( isa ) ;
 ##
 my @echoer = ( $^X, '-pe', 'BEGIN { $| = 1 }' ) ;
 
+my $h ;
 my $in ;
 my $out ;
-
-my $h ;
-
 my $fd_map ;
+
+my $h1 ;
+my $in1 ;
+my $out1 ;
+my $fd_map1 ;
 
 sub map_fds() { &IPC::Run::_map_fds }
 
-# $IPC::Run::debug = 2 ;
+$IPC::Run::debug = 3 ;
 
 my @tests = (
 ##
@@ -38,7 +41,7 @@ sub {
    $out = 'REPLACE ME' ;
    $? = 99 ;
    $fd_map = map_fds ;
-   $h = start( \@echoer, \$in, \$out, timeout 5 ) ;
+   $h = start( \@echoer, \$in, \$out ) ;
    ok( isa( $h, 'IPC::Run' ) ) ;
 },
 sub { ok( $?, 99 ) },
@@ -56,6 +59,20 @@ sub {
 sub { ok( $in, '' ) },
 sub { ok( $out, '' ) },
 sub { ok( $h->pumpable ) },
+
+sub {
+   $in1  = 'SHOULD BE UNCHANGED' ;
+   $out1 = 'REPLACE ME' ;
+   $? = 99 ;
+   $fd_map1 = map_fds ;
+   $h1 = start( \@echoer, \$in1, \$out1 ) ;
+   ok( isa( $h1, 'IPC::Run' ) ) ;
+},
+sub { ok( $?, 99 ) },
+sub { ok( $in1,  'SHOULD BE UNCHANGED' ) },
+sub { ok( $out1, '' ) },
+sub { ok( $h1->pumpable ) },
+
 
 sub {
    $in  = "hello\n" ;
@@ -79,28 +96,7 @@ sub { ok( $in, '' ) },
 sub { ok( $out, "hello\nworld\n" ) },
 sub { ok( $h->pumpable ) },
 
-## Test \G pos() restoral
-sub {
-   $in = "hello\n" ;
-   $out = "" ;
-   $? = 0 ;
-   pump $h until $out =~ /hello\n/g ;
-   ok( 1 ) ;
-},
-
-sub {
-   ok pos( $out ), 6, "pos\$out" ;
-},
-
-sub {
-   $in = "world\n" ;
-   $? = 0 ;
-   pump $h until $out =~ /\Gworld/gc ;
-   ok( 1 ) ;
-},
-
-
-sub { ok( $h->finish ) },
+sub { warn "hi" ;ok( $h->finish ) },
 sub { ok( ! $? ) },
 sub { ok( map_fds, $fd_map ) },
 sub { ok( $out, "hello\nworld\n" ) },
@@ -108,5 +104,8 @@ sub { ok( ! $h->pumpable ) },
 ) ;
 
 plan tests => scalar @tests ;
+
+skip "adopt not done yet", 1 for ( @tests ) ;
+exit 0 ;
 
 $_->() for ( @tests ) ;

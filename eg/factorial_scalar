@@ -4,7 +4,7 @@
 
 use strict ;
 
-use IPC::Run qw( start ) ;
+use IPC::Run qw( start timeout ) ;
 
 die "usage: $0 <num>\n\nwhere <num> is a positive integer\n" unless @ARGV ;
 my $i = shift ;
@@ -12,7 +12,7 @@ die "\$i must be > 0, not '$i'" unless $i =~ /^\d+$/ && $i > 0 ;
 
 my ( $in, $out ) ;
 
-my $h = start( ['bc'], \$in, \$out, { timeout => 5 } ) ;
+my $h = start ['bc'], \$in, \$out, timeout( 5 ) ;
 
 $in = "a = i = $i ; i\n" ;
 

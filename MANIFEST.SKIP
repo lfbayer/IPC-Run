@@ -1,5 +1,12 @@
 CVS/.*
+\.bak$
 \.sw[a-z]$
-\.tar(\.gz)?$
-Makefile
-mess/.*
+\.tar$
+\.tgz$
+\.tar\.gz$
+^mess/
+^tmp/
+^blib/
+^Makefile$
+^Makefile\.[a-z]+$
+^pm_to_blib$
