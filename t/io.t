@@ -83,7 +83,7 @@ sub {
    spit $in_file, $text ;
    $recv = 'REPLACE ME' ;
    $fd_map = map_fds ;
-   $r = run io( $in_file, '>', \$recv ) ;
+   $r = run io( $in_file, '>', \$recv ), debug => 10 ;
    wipe $in_file ;
    ok( $r ) ;
 },

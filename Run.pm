@@ -828,7 +828,7 @@ use Fcntl ;
 use POSIX () ;
 use Symbol ;
 
-$VERSION = '0.42' ;
+$VERSION = '0.44' ;
 
 @ISA = qw( Exporter ) ;
 
@@ -861,7 +861,7 @@ my @API        = qw(
 use Carp ;
 use Errno qw( EAGAIN ) ;
 use File::Spec ;
-use FileHandle ;
+use IO::Handle ;
 require IPC::Run::IO ;
 require IPC::Run::Timer ;
 use UNIVERSAL qw( isa ) ;
@@ -1531,6 +1531,9 @@ sub harness {
 	 }
 
 	 elsif ( ! ref $_ ) {
+            my $opt = $_ ;
+            croak "Illegal option '$_'"
+               unless grep $_ eq $opt, keys %$self ; 
 	    $self->{$_} = shift @args ;
 	 }
 
@@ -1601,7 +1604,6 @@ sub _open_pipes {
    for ( sort keys %{$self->{PTYS}} ) {
       _debug "opening pty '", $_, "'" if $debug > 2 ;
       my $pty = _pty ;
-      $pty->autoflush() ;
       $self->{PTYS}->{$_} = $pty ;
    }
 
@@ -1871,8 +1873,8 @@ sub _open_pipes {
    }
 
    ## give all but the last child all of the output file descriptors
-   ## These will be rewritten if the child already dup2s on to these
-   ## descriptors.
+   ## These will be reopened (and thus rendered useless) if the child
+   ## dup2s on to these descriptors, since we unshift these.
    for ( my $num = 0 ; $num < $#{$self->{KIDS}} ; ++$num ) {
       for ( reverse @output_fds_accum ) {
          next unless defined $_ ;
@@ -1924,7 +1926,7 @@ sub _open_pipes {
 	       ' is my ', $_->{FD}
 	    ) if $debug > 1 ;
 	    vec( $self->{ $_->{TYPE} =~ /^</ ? 'WIN' : 'RIN' }, $_->{FD}, 1 )=1;
-	    vec( $self->{EIN}, $_->{FD}, 1 ) = 1 ;
+#	    vec( $self->{EIN}, $_->{FD}, 1 ) = 1 ;
 	    push @{$self->{PIPES}}, $_ ;
 	 }
       }
@@ -1934,7 +1936,7 @@ sub _open_pipes {
       my $fd = $io->fileno ;
       vec( $self->{RIN}, $fd, 1 ) = 1 if $io->mode =~ /r/ ;
       vec( $self->{WIN}, $fd, 1 ) = 1 if $io->mode =~ /w/ ;
-      vec( $self->{EIN}, $fd, 1 ) = 1 ;
+#      vec( $self->{EIN}, $fd, 1 ) = 1 ;
       push @{$self->{PIPES}}, $io ;
    }
 
@@ -1993,7 +1995,7 @@ sub _open_pipes {
 	       unless ( $pipe->{PAUSED} ) {
 		  _debug_fd( 'pausing', $pipe ) if $debug > 2 ;
 		  vec( $self->{WIN}, $pipe->{FD}, 1 ) = 0 ;
-		  vec( $self->{EIN}, $pipe->{FD}, 1 ) = 0 ;
+#		  vec( $self->{EIN}, $pipe->{FD}, 1 ) = 0 ;
 		  vec( $self->{PIN}, $pipe->{FD}, 1 ) = 1 ;
 		  $pipe->{PAUSED} = 1 ;
 	       }
@@ -2127,7 +2129,6 @@ sub _do_kid {
       exit 0 ;
    }
    else {
-$| = 1 ;
       _debug 'execing ', $kid->{PATH} ;
       POSIX::close( $debug_fd ) if defined $debug_fd ;
       _exec( $kid->{PATH}, @{$kid->{VAL}}[1..$#{$kid->{VAL}}] ) ;
@@ -2158,6 +2159,27 @@ pump.
 
 start() also starts all timers in the harness.  See L<IPC::Run::Timer>
 for more information.
+
+start() flushes STDOUT and STDERR to help you avoid duplicate output.
+It has no way of asking Perl to flush all your open filehandles, so
+you are going to need to flush any others you have open.  Sorry.
+
+Here's how if you don't want to alter the state of $| for your
+filehandle:
+
+   $ofh = select HANDLE ; $of = $| ; $| = 1 ; $| = $of ; select $ofh;
+
+If you don't mind leaving output unbuffered on HANDLE, you can do
+the slightly shorter
+
+   $ofh = select HANDLE ; $| = 1 ; select $ofh;
+
+Or, you can use IO::Handle's flush() method:
+
+   use IO::Handle ;
+   flush HANDLE ;
+
+Perl needs the equivalent of C's fflush( (FILE *)NULL ).
 
 =cut
 
@@ -2203,6 +2225,15 @@ sub start {
       _debug 'caught ', $@ ;
    }
 
+## This is a bit of a hack, we should do it for all open filehandles.
+## Since there's no way I know of to enumerate open filehandles, we simply
+## autoflush STDOUT and STDERR.  This is done so that the children don't
+## inherit output buffers chock full o' redundant data.  It's really
+## confusing to track that down.
+   {
+      my $ofh = select STDOUT ; my $of = $| ; $| = 1 ; $| = $of ; select $ofh;
+         $ofh = select STDERR ;    $of = $| ; $| = 1 ; $| = $of ; select $ofh;
+   }
    if ( ! @errs ) {
       for my $kid ( @{$self->{KIDS}} ) {
 	 eval {
@@ -2317,7 +2348,7 @@ sub _clobber {
    my $doomed = $file->{FD} ;
    my $dir = $file->{TYPE} =~ /^</ ? 'WIN' : 'RIN' ;
    vec( $self->{$dir}, $doomed, 1 ) = 0 ;
-   vec( $self->{EIN},  $doomed, 1 ) = 0 ;
+#   vec( $self->{EIN},  $doomed, 1 ) = 0 ;
    vec( $self->{PIN},  $doomed, 1 ) = 0 ;
    if ( $file->{TYPE} =~ /^(.)pty.$/ ) {
       if ( $1 eq '>' ) {
@@ -2389,7 +2420,7 @@ SELECT:
 	    _debug_fd( "unpausing", $file ) if $debug > 1 ;
 	    $file->{PAUSED} = 0 ;
 	    vec( $self->{WIN}, $file->{FD}, 1 ) = 1 ;
-	    vec( $self->{EIN}, $file->{FD}, 1 ) = 1 ;
+#	    vec( $self->{EIN}, $file->{FD}, 1 ) = 1 ;
 	    vec( $self->{PIN}, $file->{FD}, 1 ) = 0 ;
 	 }
 	 else {
@@ -2408,11 +2439,12 @@ SELECT:
 	       $out = 'r' if vec( $self->{RIN}, $_, 1 ) ;
 	       $out = $out ? 'b' : 'w' if vec( $self->{WIN}, $_, 1 ) ;
 	       $out = 'p' if ! $out && vec( $self->{PIN}, $_, 1 ) ;
+	       $out = $out ? uc( $out ) : 'x' if vec( $self->{EIN}, $_, 1 ) ;
 	       $out = '-' unless $out ;
 	       $out ;
 	    } (0..128)
 	 ) ;
-	 $map =~ s/((?:[a-z-]|\([^\)]*\)){12,}?)-*$/$1/ ;
+	 $map =~ s/((?:[a-zA-Z-]|\([^\)]*\)){12,}?)-*$/$1/ ;
 	 _debug(
 	    'selecting ', $map, ' with timeout=',
 	    defined $timeout ? $timeout : 'forever'
@@ -2436,11 +2468,12 @@ SELECT:
 	       my $out ;
 	       $out = 'r' if vec( $self->{ROUT}, $_, 1 ) ;
 	       $out = $out ? 'b' : 'w' if vec( $self->{WOUT}, $_, 1 ) ;
+	       $out = $out ? uc( $out ) : 'x' if vec( $self->{EOUT}, $_, 1 ) ;
 	       $out = '-' unless $out ;
 	       $out ;
 	    } (0..128)
 	 ) ;
-	 $map =~ s/((?:[a-z-]|\([^\)]*\)){12,}?)-*$/$1/ ;
+	 $map =~ s/((?:[a-zA-Z-]|\([^\)]*\)){12,}?)-*$/$1/ ;
 	 _debug "selected  ", $map ;
       }
 
@@ -2490,7 +2523,15 @@ confess "fooy" unless isa( $pipe, "IPC::Run::IO" ) ;
 	 }
 
 	 if ( defined $pipe->{FD} && vec( $self->{EOUT}, $pipe->{FD}, 1 ) ) {
-	    croak "Exception on pipe $pipe->{FD}" ;
+	    ## BSD seems to sometimes raise the exceptional condition flag
+	    ## when a pipe is closed before we read it's last data.  This
+	    ## causes spurious warnings and generally renders the exception
+	    ## mechanism mostly useless for our purposes.  The exception
+	    ## flag semantics are too variable (they're device driver
+	    ## specific) for me to easily map to any automatic action like
+	    ## warning or croaking (try running v0.42 if you don't beleive me
+	    ## :-).
+#	    warn "Exception on descriptor $pipe->{FD}" ;
 	 }
       }
    }
