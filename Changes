@@ -1,5 +1,10 @@
 Revision history for Perl extension IPC::Run
 
+0.63 Wed Feb 27 12:25:22 EST 2002
+   - the select loop will now poll (with logarithmic fallback) when all
+     I/O is closed but we have children running.  Problem report by
+     "William R. Pearson" <wrp@alpha0.bioch.virginia.edu>.
+
 0.62 Tue Jan  1 16:40:54 EST 2002
    - Have all children close all file descriptors opened by the parent
      harness, otherwise children of different harnesses can unwittingly

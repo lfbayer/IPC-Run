@@ -1006,7 +1006,7 @@ in their exit codes.
 
 =cut
 
-$VERSION = 0.62 ;
+$VERSION = 0.63 ;
 
 @ISA = qw( Exporter ) ;
 
@@ -3163,8 +3163,18 @@ SELECT:
          _debug 'fds for select: ', $map if _debugging_details ;
       }
 
-      ## _do_filters may have closed our last fd.
-      last unless $self->pumpable ;
+      ## _do_filters may have closed our last fd, and we need to see if
+      ## we have I/O, or are just waiting for children to exit.
+      my $p = $self->pumpable;
+      last unless $p;
+      if ( $p > 0  && ( ! defined $timeout || $timeout > 0.1 ) ) {
+         ## No I/O will wake the select loop up, but we have children
+         ## lingering, so we need to poll them with a short timeout.
+	 ## Otherwise, assume more input will be coming.
+	 $timeout = $not_forever ;
+         $not_forever *= 2 ;
+         $not_forever = 0.5 if $not_forever >= 0.5 ;
+      }
 
       ## Make sure we don't block forever in select() because inputs are
       ## paused.
@@ -3185,6 +3195,7 @@ SELECT:
 
       _debug 'timeout=', defined $timeout ? $timeout : 'forever'
          if _debugging_details ;
+
       my $nfound ;
       unless ( Win32_MODE ) {
          $nfound = select(
@@ -3440,9 +3451,13 @@ active processes.
 
 =cut
 
+## Undocumented feature (don't depend on it outside this module):
+## returns -1 if we have I/O channels open, or >0 if no I/O channels
+## open, but we have kids running.  This allows the select loop
+## to poll for child exit.
 sub pumpable {
    my IPC::Run $self = shift ;
-   return 1 if @{$self->{PIPES}} ;
+   return -1 if @{$self->{PIPES}} ;
    $self->reap_nb ;
    return $self->_running_kids ;
 }
@@ -4450,8 +4465,8 @@ no longer open"), but I haven't been able to reproduce it (typically).
 
 =head1 LIMITATIONS
 
-Requires a system that supports C<waitpid( $pid, WNOHANG )> so it can tell if a
-child process is still running.
+On Unix, requires a system that supports C<waitpid( $pid, WNOHANG )> so
+it can tell if a child process is still running.
 
 PTYs don't seem to be non-blocking on some versions of Solaris. Here's a
 test script contributed by Borislav Deianov <borislav@ensim.com> to see
