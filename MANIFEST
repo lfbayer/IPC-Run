@@ -3,9 +3,12 @@ MANIFEST
 MANIFEST.SKIP
 Makefile.PL
 Run.pm
+Run/Debug.pm
 Run/IO.pm
 Run/Timer.pm
 Run/Win32Helper.pm
+Run/Win32IO.pm
+Run/Win32Pump.pm
 abuse/blocking_debug_with_sub_coprocess
 abuse/blocking_writes
 abuse/broken_pipe_on_bad_executable_name

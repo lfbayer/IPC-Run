@@ -1006,7 +1006,7 @@ in their exit codes.
 
 =cut
 
-$VERSION = 0.66 ;
+$VERSION = 0.7 ;
 
 @ISA = qw( Exporter ) ;
 
@@ -1030,7 +1030,7 @@ my @API        = qw(
    binary
 ) ;
 
-@EXPORT_OK = ( @API, @FILTER_IMP, @FILTERS, qw( filter_tests ) ) ;
+@EXPORT_OK = ( @API, @FILTER_IMP, @FILTERS, qw( filter_tests Win32_MODE ) ) ;
 %EXPORT_TAGS = (
    'filter_imp' => \@FILTER_IMP,
    'all'        => \@EXPORT_OK,
@@ -1039,16 +1039,20 @@ my @API        = qw(
 ) ;
 
 use strict ;
+
+use IPC::Run::Debug;
 use Exporter ;
 use Fcntl ;
 use POSIX () ;
 use Symbol ;
+use Carp ;
+use File::Spec ;
+use IO::Handle ;
+require IPC::Run::IO ;
+require IPC::Run::Timer ;
+use UNIVERSAL qw( isa ) ;
 
 use constant Win32_MODE => $^O =~ /os2|Win32/i ;
-
-## Declare these first so Win32Helper can see the prototypes
-sub _debugging_details() ;
-sub _debugging_gory_details() ;
 
 BEGIN {
    if ( Win32_MODE ) {
@@ -1060,13 +1064,6 @@ BEGIN {
    }
 }
 
-
-use Carp ;
-use File::Spec ;
-use IO::Handle ;
-require IPC::Run::IO ;
-require IPC::Run::Timer ;
-use UNIVERSAL qw( isa ) ;
 
 use fields (
    'ID',           # An identifier of this harness
@@ -1094,13 +1091,9 @@ use fields (
    'SYNC_WRITER_FD', # write end of pipe used to sync w/ child and report
                    # exec errors from child.
 
-   # Bit vectors for select()
-   'RIN',
-   'WIN',
-   'EIN',
-   'ROUT',
-   'WOUT',
-   'EOUT',
+   'RIN',  'WIN',  'EIN',  # Bit vectors for select()
+   'ROUT', 'WOUT', 'EOUT',
+
    'PIN',          # A bit vector holding paused PIPES that would otherwise
                    # be set in WIN.  This is a bit vector to make the
                    # debugging display of filehandles easier to build, since
@@ -1115,6 +1108,7 @@ use fields (
 
    # Option flags, passed in by caller
    'debug',
+   'noinherit',
 #   'timeout',
 
    # Testing flags, passed in from t/*.t
@@ -1145,44 +1139,6 @@ sub _started()  {3}
 ## by that particular child.
 my %fds ;
 
-
-##
-## Debugging routines
-##
-sub _map_fds {
-   my $map = '' ;
-   my $digit = 0 ;
-   my $in_use ;
-   my $dummy ;
-   for my $fd (0..63) {
-      ## I'd like a quicker way (less user, cpu & expecially sys and kernal
-      ## calls) to detect open file descriptors.  Let me know...
-      ## Hmmm, could do a 0 length read and check for bad file descriptor...
-      ## but that segfaults on Win32
-      my $test_fd = POSIX::dup( $fd ) ;
-      $in_use = defined $test_fd ;
-      POSIX::close $test_fd if $in_use ;
-      $map .= $in_use ? $digit : '-';
-      $digit = 0 if ++$digit > 9 ;
-   }
-   warn "No fds open???" unless $map =~ /\d/ ;
-   $map =~ s/(.{1,12})-*$/$1/ ;
-   return $map ;
-}
-
-use vars qw( $parent_pid ) ;
-
-$parent_pid = $$ ;
-
-## TODO: move debugging to it's own module and make it compile-time
-## optimizable.
-
-## Give kid process debugging nice names
-my $debug_name ;
-
-## Kids send to our select loop on this fd.
-my $recv_debug_desc_fd ;
-
 ## There's a bit of hackery going on here.
 ##
 ## We want to have any code anywhere be able to emit
@@ -1193,43 +1149,6 @@ my $recv_debug_desc_fd ;
 ## Thus, $cur_self was born.
 
 use vars qw( $cur_self ) ;
-
-sub _debugging_level() {
-   my $level = 0 ;
-
-   $level = $cur_self->{debug} || 0
-      if $cur_self && ( $cur_self->{debug} || 0 ) >= $level ;
-
-   $level = $ENV{IPCRUNDEBUG}
-      if ( $ENV{IPCRUNDEBUG} || 0 ) > $level ;
-   return $level ;
-}
-
-sub _debugging_atleast($) {
-   my $min_level = shift || 1 ;
-
-   my $level = _debugging_level ;
-   
-   return $level >= $min_level ? $level : 0 ;
-}
-
-sub _debugging()              { _debugging_atleast 1 }
-sub _debugging_data()         { _debugging_atleast 2 }
-sub _debugging_details()      { _debugging_atleast 3 }
-sub _debugging_gory_details() { _debugging_atleast 4 }
-
-sub _debug_init {
-   ## This routine is called only in spawned children to fake out the
-   ## debug routines so they'll emit debugging info.
-   $cur_self = {} ;
-   (  $parent_pid,
-      $^T, 
-      $cur_self->{debug}, 
-      $cur_self->{DEBUG_FD}, 
-      $debug_name 
-   ) = @_ ;
-}
-
 
 sub _debug_fd {
    return fileno STDERR unless defined $cur_self ;
@@ -1255,80 +1174,6 @@ sub DESTROY {
    $self->{DEBUG_FD} = undef ;
 }
 
-sub _debug {
-   return unless _debugging ;
-
-   my $fd = _debug_fd ;
-
-   my $s ;
-   my $debug_id ;
-   $debug_id = join( 
-      " ",
-      join(
-         "",
-         defined $cur_self ? "#$cur_self->{ID}" : (),
-         "($$)",
-      ),
-      defined $debug_name && length $debug_name ? $debug_name        : (),
-   ) ;
-   my $prefix = join(
-      "",
-      "IPC::Run",
-      sprintf( " %04d", time - $^T ),
-      ( _debugging_details ? ( " ", _map_fds ) : () ),
-      length $debug_id ? ( " [", $debug_id, "]" ) : (),
-      ": ",
-   ) ;
-
-   my $msg = join( '', map defined $_ ? $_ : "<undef>", @_ ) ;
-   chomp $msg ;
-   $msg =~ s{^}{$prefix}gm ;
-   $msg .= "\n" ;
-   POSIX::write( $fd, $msg, length $msg ) ;
-}
-
-
-my @fd_descs = ( 'stdin', 'stdout', 'stderr' ) ;
-
-sub _debug_desc_fd {
-   return unless _debugging ;
-   my $text = shift ;
-   my $op = pop ;
-   my $kid = $_[0] ;
-
-Carp::carp join " ", caller(0), $text, $op  if defined $op  && isa( $op, "IO::Pty" ) ;
-
-   _debug(
-      $text,
-      ' ',
-      ( defined $op->{FD}
-         ? $op->{FD} < 3
-            ? ( $fd_descs[$op->{FD}] )
-            : ( defined $recv_debug_desc_fd && $op->{FD} eq $recv_debug_desc_fd )
-               ? ( 'debug (', $op->{FD}, ')' )
-               : ( 'fd ', $op->{FD} )
-         : $op->{FD}
-      ),
-      ( defined $op->{KFD}
-         ? (
-            ' (kid',
-            ( defined $kid ? ( ' ', $kid->{NUM}, ) : () ),
-            "'s ",
-            ( $op->{KFD} < 3
-               ? $fd_descs[$op->{KFD}]
-               : defined $kid
-                  && defined $kid->{DEBUG_FD}
-                  && $op->{KFD} == $kid->{DEBUG_FD}
-                  ? ( 'debug (', $op->{KFD}, ')' )
-                  : ( 'fd ', $op->{KFD} )
-            ),
-            ')',
-         )
-         : ()
-      ),
-   ) ;
-}
-
 ##
 ## Support routines (NOT METHODS)
 ##
@@ -1352,8 +1197,9 @@ sub _search_path {
       : '/'
       ) ;
 
+## TODO: Make this look for .exe, etc. on Win32.
    if ( $cmd_name =~ /($dirsep)/ ) {
-      _debug "'", $cmd_name, "' contains '", $1, "'" ;
+      _debug "'$cmd_name' contains '$1'"  if _debugging;
       croak "file not found: $cmd_name"    unless -e $cmd_name ;
       croak "not a file: $cmd_name"        unless -f $cmd_name ;
       croak "permission denied: $cmd_name" unless -x $cmd_name ;
@@ -1361,9 +1207,11 @@ sub _search_path {
    }
 
    if ( exists $cmd_cache{$cmd_name} ) {
-      _debug "'", $cmd_name, "' found in cache: '", $cmd_cache{$cmd_name}, "'" ;
+      _debug "'$cmd_name' found in cache: '$cmd_cache{$cmd_name}'"
+         if _debugging;
       return $cmd_cache{$cmd_name} if -x $cmd_cache{$cmd_name} ;
-      _debug "'", $cmd_cache{$cmd_name},"' no longer executable, searching..." ;
+      _debug "'$cmd_cache{$cmd_name}' no longer executable, searching..."
+         if _debugging;
       delete $cmd_cache{$cmd_name} ;
    }
 
@@ -1619,7 +1467,10 @@ them.
 
 =cut
 
+use vars qw( $in_run );  ## No, not Enron ;)
+
 sub run {
+   local $in_run = 1;  ## Allow run()-only optimizations.
    my IPC::Run $self = start( @_ );
    my $r = eval {
       $self->{clear_ins} = 0 ;
@@ -1691,8 +1542,10 @@ sub signal {
    my ( $signal ) = @_ ;
    croak "Undefined signal passed to signal" unless defined $signal ;
    for ( grep $_->{PID} && ! defined $_->{RESULT}, @{$self->{KIDS}} ) {
-      _debug "sending $signal to $_->{PID}" ;
-      kill $signal, $_->{PID} or _debug "$! sending $signal to $_->{PID}" ;
+      _debug "sending $signal to $_->{PID}"
+         if _debugging;
+      kill $signal, $_->{PID}
+         or _debugging && _debug "$! sending $signal to $_->{PID}" ;
    }
    
    return ;
@@ -1880,7 +1733,7 @@ sub harness {
          for keys %$options ;
    }
 
-   _debug "****** harnessing *****" ;
+   _debug "****** harnessing *****" if _debugging;
 
    my $first_parse ;
    local $_ ;
@@ -1900,7 +1753,7 @@ sub harness {
                         )
                   )
                : '<undef>'
-         ) if _debugging_data ;
+         ) if _debugging;
 
       REPARSE:
          if ( ref eq 'ARRAY' || ( ! $cur_kid && ref eq 'CODE' ) ) {
@@ -2120,7 +1973,7 @@ sub harness {
             } if $stderr_too ;
          }
 
-         elsif ( /^\|$/ ) {
+         elsif ( $_ eq "|" ) {
             croak "No command before '$_'" unless $cur_kid ;
             unshift @{$cur_kid->{OPS}}, {
                TYPE => '|',
@@ -2131,7 +1984,7 @@ sub harness {
             $cur_kid    = undef ;
          }
 
-         elsif ( /^&$/ ) {
+         elsif ( $_ eq "&" ) {
             croak "No command before '$_'" unless $cur_kid ;
             unshift @{$cur_kid->{OPS}}, {
                TYPE => 'close',
@@ -2193,7 +2046,7 @@ sub harness {
       } ;
       if ( $@ ) {
          push @errs, $@ ;
-         _debug 'caught ', $@ ;
+         _debug 'caught ', $@ if _debugging;
       }
    } }
 
@@ -2231,7 +2084,7 @@ sub _open_pipes {
       eval { $_->init ; } ;
       if ( $@ ) {
          push @errs, $@ ;
-         _debug 'caught ', $@ ;
+         _debug 'caught ', $@ if _debugging;
       }
       else {
          push @close_on_fail, $_ ;
@@ -2257,62 +2110,61 @@ sub _open_pipes {
       @output_fds_accum = () ;
       for my $op ( @{$kid->{OPS}} ) {
 #         next if $op->{IS_DEBUG} ;
-         eval {
+         my $ok = eval {
             if ( $op->{TYPE} eq '<' ) {
-               for my $source ( $op->{SOURCE} ) {
-                  if ( ! ref $source ) {
-                     _debug(
-                        "kid ", $kid->{NUM}, " to read ", $op->{KFD},
-                        " from '" .  $source, "' (read only)"
-                     ) if _debugging_details ;
-                     croak "simulated open failure"
-                        if $self->{_simulate_open_failure} ;
-                     $op->{TFD} = _sysopen( $source, O_RDONLY ) ;
-                     push @close_on_fail, $op->{TFD} ;
-                  }
-                  elsif ( isa( $source, 'GLOB' )
-                     ||   isa( $source, 'IO::Handle' )
-                  ) {
-                     croak
-                        "Unopened filehandle in input redirect for $op->{KFD}"
-                        unless defined fileno $source ;
-                     $op->{TFD} = fileno $source ;
-                     _debug(
-                        "kid ", $kid->{NUM}, " to read ", $op->{KFD},
-                        " from fd ", $op->{TFD}
-                     ) if _debugging_details ;
-                  }
-                  elsif ( isa( $source, 'SCALAR' ) ) {
-                     _debug(
-                        "kid ", $kid->{NUM}, " to read ", $op->{KFD},
-                        " from SCALAR"
-                     ) if _debugging_details ;
+               my $source = $op->{SOURCE};
+	       if ( ! ref $source ) {
+		  _debug(
+		     "kid ", $kid->{NUM}, " to read ", $op->{KFD},
+		     " from '" .  $source, "' (read only)"
+		  ) if _debugging_details ;
+		  croak "simulated open failure"
+		     if $self->{_simulate_open_failure} ;
+		  $op->{TFD} = _sysopen( $source, O_RDONLY ) ;
+		  push @close_on_fail, $op->{TFD} ;
+	       }
+	       elsif ( isa( $source, 'GLOB' )
+		  ||   isa( $source, 'IO::Handle' )
+	       ) {
+		  croak
+		     "Unopened filehandle in input redirect for $op->{KFD}"
+		     unless defined fileno $source ;
+		  $op->{TFD} = fileno $source ;
+		  _debug(
+		     "kid ", $kid->{NUM}, " to read ", $op->{KFD},
+		     " from fd ", $op->{TFD}
+		  ) if _debugging_details ;
+	       }
+	       elsif ( isa( $source, 'SCALAR' ) ) {
+		  _debug(
+		     "kid ", $kid->{NUM}, " to read ", $op->{KFD},
+		     " from SCALAR"
+		  ) if _debugging_details ;
 
-		     $op->open_pipe( $self->_debug_fd ) ;
-                     push @close_on_fail, $op->{KFD}, $op->{FD} ;
+		  $op->open_pipe( $self->_debug_fd ) ;
+		  push @close_on_fail, $op->{KFD}, $op->{FD} ;
 
-                     my $s = '' ;
-                     $op->{KIN_REF} = \$s ;
-                  }
-                  elsif ( isa( $source, 'CODE' ) ) {
-                     _debug(
-			'kid ', $kid->{NUM}, ' to read ', $op->{KFD}, ' from CODE'
-                     ) if _debugging_details ;
-		     
-		     $op->open_pipe( $self->_debug_fd ) ;
-                     push @close_on_fail, $op->{KFD}, $op->{FD} ;
-                     
-		     my $s = '' ;
-                     $op->{KIN_REF} = \$s ;
-                  }
-                  else {
-                     croak(
-                        "'"
-                        . ref( $source )
-                        . "' not allowed as a source for input redirection"
-                     ) ;
-                  }
-               }
+		  my $s = '' ;
+		  $op->{KIN_REF} = \$s ;
+	       }
+	       elsif ( isa( $source, 'CODE' ) ) {
+		  _debug(
+		     'kid ', $kid->{NUM}, ' to read ', $op->{KFD}, ' from CODE'
+		  ) if _debugging_details ;
+		  
+		  $op->open_pipe( $self->_debug_fd ) ;
+		  push @close_on_fail, $op->{KFD}, $op->{FD} ;
+		  
+		  my $s = '' ;
+		  $op->{KIN_REF} = \$s ;
+	       }
+	       else {
+		  croak(
+		     "'"
+		     . ref( $source )
+		     . "' not allowed as a source for input redirection"
+		  ) ;
+	       }
                $op->_init_filters ;
             }
             elsif ( $op->{TYPE} eq '<pipe' ) {
@@ -2493,14 +2345,15 @@ sub _open_pipes {
             elsif ( $op->{TYPE} eq '&' ) {
                @output_fds_accum = () ;
             } # end if $op->{TYPE} tree
-         } # end for ( OPS }
-      } ; # end eval
-      if ( $@ ) {
-      die ;
-         push @errs, $@ ;
-         _debug 'caught ', $@ ;
-      }
+	    1;
+	 } ; # end eval
+	 unless ( $ok ) {
+	    push @errs, $@ ;
+	    _debug 'caught ', $@ if _debugging;
+	 }
+      } # end for ( OPS }
    }
+
    if ( @errs ) {
       for ( @close_on_fail ) {
          _close( $_ ) ;
@@ -2517,7 +2370,11 @@ sub _open_pipes {
    ## give all but the last child all of the output file descriptors
    ## These will be reopened (and thus rendered useless) if the child
    ## dup2s on to these descriptors, since we unshift these.  This way
-   ## passed-in parameters override default.
+   ## each process emits output to the same file descriptors that the
+   ## last child will write to.  This is probably not quite correct,
+   ## since each child should write to the file descriptors inherited
+   ## from the parent.
+   ## TODO: fix the inheritance of output file descriptors.
    ## NOTE: This sharing of OPS among kids means that we can't easily put
    ## a kid number in each OPS structure to ping the kid when all ops
    ## have closed (when $self->{PIPES} has emptied).  This means that we
@@ -2701,14 +2558,15 @@ sub _do_kid_and_exit {
    eval {
       local $cur_self = $self ;
 
-      $debug_name = ref $kid->{VAL} eq "CODE"
+      _set_child_debug_name( ref $kid->{VAL} eq "CODE"
 	 ? "CODE"
-	 : basename( $kid->{VAL}->[0] ) ;
+	 : basename( $kid->{VAL}->[0] )
+      );
 
       ## close parent FD's first so they're out of the way.
       ## Don't close STDIN, STDOUT, STDERR: they should be inherited or
       ## overwritten below.
-      my @needed = ( 1, 1, 1 ) ;
+      my @needed = $self->{noinherit} ? () : ( 1, 1, 1 ) ;
       $needed[ $self->{SYNC_WRITER_FD} ] = 1 ;
       $needed[ $self->{DEBUG_FD} ] = 1 if defined $self->{DEBUG_FD} ;
 
@@ -2829,7 +2687,7 @@ sub _do_kid_and_exit {
    ## We must be executing code in the child, otherwise exec() would have
    ## prevented us from being here.
    _close $self->{SYNC_WRITER_FD} ;
-   _debug 'calling fork()ed CODE ref' ;
+   _debug 'calling fork()ed CODE ref' if _debugging;
    POSIX::close $self->{DEBUG_FD}      if defined $self->{DEBUG_FD} ;
    ## TODO: Overload CORE::GLOBAL::exit...
    $kid->{VAL}->() ;
@@ -2917,7 +2775,7 @@ sub start {
 
    $self->kill_kill if $self->{STATE} == _started ;
 
-   _debug "** starting" ;
+   _debug "** starting" if _debugging;
 
    $_->{RESULT} = undef for @{$self->{KIDS}} ;
 
@@ -2926,20 +2784,23 @@ sub start {
    ## input queues to '' when they're empty.
    $self->{clear_ins} = 1 ;
 
+   IPC::Run::Win32Helper::optimize $self
+       if Win32_MODE && $in_run;
+
    my @errs ;
 
    for ( @{$self->{TIMERS}} ) {
       eval { $_->start } ;
       if ( $@ ) {
          push @errs, $@ ;
-         _debug 'caught ', $@ ;
+         _debug 'caught ', $@ if _debugging;
       }
    }
 
    eval { $self->_open_pipes } ;
    if ( $@ ) {
       push @errs, $@ ;
-      _debug 'caught ', $@ ;
+      _debug 'caught ', $@ if _debugging;
    }
 
    if ( ! @errs ) {
@@ -2963,7 +2824,7 @@ sub start {
          eval {
             croak "simulated failure of fork"
                if $self->{_simulate_fork_failure} ;
-            unless ( $^O =~ /^(?:os2|MSWin32)$/ ) {
+            unless ( Win32_MODE ) {
 	       $self->_spawn( $kid ) ;
             }
             else {
@@ -2977,7 +2838,7 @@ sub start {
                         ( $kid->{PATH}, @{$kid->{VAL}}[1..$#{$kid->{VAL}}] )
                      )
                   )
-               ) ;
+               ) if _debugging;
 	       ## The external kid wouldn't know what to do with it anyway.
 	       ## This is only used by the "helper" pump processes on Win32.
 	       _dont_inherit( $self->{DEBUG_FD} ) ;
@@ -2986,12 +2847,12 @@ sub start {
 		     [ $kid->{PATH}, @{$kid->{VAL}}[1..$#{$kid->{VAL}}] ],
 		     $kid->{OPS},
 		  ) ;
-               _debug "spawn() = ", $kid->{PID} ;
+               _debug "spawn() = ", $kid->{PID} if _debugging;
             }
          } ;
          if ( $@ ) {
             push @errs, $@ ;
-            _debug 'caught ', $@ ;
+            _debug 'caught ', $@ if _debugging;
          }
       }
    }
@@ -3008,10 +2869,11 @@ sub start {
             defined $_->{TFD}
                && ! $_->{DONT_CLOSE}
                && ! $closed[$_->{TFD}]
+               && ( ! Win32_MODE || ! $_->{RECV_THROUGH_TEMP_FILE} ) ## Win32 hack
          } ;
          if ( $@ ) {
             push @errs, $@ ;
-            _debug 'caught ', $@ ;
+            _debug 'caught ', $@ if _debugging;
          }
          if ( $close_it || $@ ) {
             eval {
@@ -3021,7 +2883,7 @@ sub start {
             } ;
             if ( $@ ) {
                push @errs, $@ ;
-               _debug 'caught ', $@ ;
+               _debug 'caught ', $@ if _debugging;
             }
          }
       }
@@ -3083,9 +2945,11 @@ sub _clobber {
    else {
       _close( $doomed ) ;
    }
+
    @{$self->{PIPES}} = grep
       defined $_->{FD} && ( $_->{TYPE} ne $file->{TYPE} || $_->{FD} ne $doomed),
-   @{$self->{PIPES}} ;
+      @{$self->{PIPES}} ;
+
    $file->{FD} = undef ;
 }
 
@@ -3183,7 +3047,8 @@ SELECT:
 	 ## we'll loop until all inputs are unpaused, which is darn near
 	 ## forever.  And a day.
          if ( $self->{break_on_io} ) {
-	    _debug "exiting _select(): no I/O to do and timeout=forever" ;
+	    _debug "exiting _select(): no I/O to do and timeout=forever"
+               if _debugging;
 	    last ;
 	 }
 
@@ -3244,47 +3109,50 @@ SELECT:
       }
 
       ## Need to copy since _clobber alters @{$self->{PIPES}}.
-      ## TODO: Rethink _clobber().  Rething $file->{PAUSED}, too.
+      ## TODO: Rethink _clobber().  Rethink $file->{PAUSED}, too.
       my @pipes = @{$self->{PIPES}} ;
-   FILE:
-      for my $pipe ( @pipes ) {
-         ## Pipes can be shared among kids.  If another kid closes the
-         ## pipe, then it's {FD} will be undef.
-         if ( $pipe->{TYPE} =~ /^>/
-            && defined $pipe->{FD}
-            && vec( $self->{ROUT}, $pipe->{FD}, 1 )
-         ) {
-            _debug_desc_fd( "filtering data from", $pipe ) if _debugging_details ;
-confess "phooey" unless isa( $pipe, "IPC::Run::IO" ) ;
-            $io_occurred = 1 if $pipe->_do_filters( $self ) ;
-
-            next FILE unless defined $pipe->{FD} ;
-         }
-
-         ## Output pipes are not shared, AFAIK.  But I check for a defined {FD}
-         ## just in case.  Should probably just assert defined {FD}
-         if ( $pipe->{TYPE} =~ /^</
-            && defined $pipe->{FD}
-            && vec( $self->{WOUT}, $pipe->{FD}, 1 )
-         ) {
-            _debug_desc_fd( "filtering data to", $pipe ) if _debugging_details ;
-            $io_occurred = 1 if $pipe->_do_filters( $self ) ;
-
-            next FILE unless defined $pipe->{FD} ;
-         }
-
-         if ( defined $pipe->{FD} && vec( $self->{EOUT}, $pipe->{FD}, 1 ) ) {
-            ## BSD seems to sometimes raise the exceptional condition flag
-            ## when a pipe is closed before we read it's last data.  This
-            ## causes spurious warnings and generally renders the exception
-            ## mechanism useless for our purposes.  The exception
-            ## flag semantics are too variable (they're device driver
-            ## specific) for me to easily map to any automatic action like
-            ## warning or croaking (try running v0.42 if you don't beleive me
-            ## :-).
-#	    warn "Exception on descriptor $pipe->{FD}" ;
-         }
-      }
+      $io_occurred = $_->poll( $self ) ? 1 : $io_occurred for @pipes;
+#   FILE:
+#      for my $pipe ( @pipes ) {
+#         ## Pipes can be shared among kids.  If another kid closes the
+#         ## pipe, then it's {FD} will be undef.  Also, on Win32, pipes can
+#	 ## be optimized to be files, in which case the FD is left undef
+#	 ## so we don't try to select() on it.
+#         if ( $pipe->{TYPE} =~ /^>/
+#            && defined $pipe->{FD}
+#            && vec( $self->{ROUT}, $pipe->{FD}, 1 )
+#         ) {
+#            _debug_desc_fd( "filtering data from", $pipe ) if _debugging_details ;
+#confess "phooey" unless isa( $pipe, "IPC::Run::IO" ) ;
+#            $io_occurred = 1 if $pipe->_do_filters( $self ) ;
+#
+#            next FILE unless defined $pipe->{FD} ;
+#         }
+#
+#	 ## On Win32, pipes to the child can be optimized to be files
+#	 ## and FD left undefined so we won't select on it.
+#         if ( $pipe->{TYPE} =~ /^</
+#            && defined $pipe->{FD}
+#            && vec( $self->{WOUT}, $pipe->{FD}, 1 )
+#         ) {
+#            _debug_desc_fd( "filtering data to", $pipe ) if _debugging_details ;
+#            $io_occurred = 1 if $pipe->_do_filters( $self ) ;
+#
+#            next FILE unless defined $pipe->{FD} ;
+#         }
+#
+#         if ( defined $pipe->{FD} && vec( $self->{EOUT}, $pipe->{FD}, 1 ) ) {
+#            ## BSD seems to sometimes raise the exceptional condition flag
+#            ## when a pipe is closed before we read it's last data.  This
+#            ## causes spurious warnings and generally renders the exception
+#            ## mechanism useless for our purposes.  The exception
+#            ## flag semantics are too variable (they're device driver
+#            ## specific) for me to easily map to any automatic action like
+#            ## warning or croaking (try running v0.42 if you don't beleive me
+#            ## :-).
+#            warn "Exception on descriptor $pipe->{FD}" ;
+#         }
+#      }
    }
 
    return ;
@@ -3298,12 +3166,12 @@ sub _cleanup {
    for ( values %{$self->{PTYS}} ) {
       next unless ref $_ ;
       eval {
-         _debug "closing slave fd ", fileno $_->slave ;
+         _debug "closing slave fd ", fileno $_->slave if _debugging_data;
          close $_->slave ;
       } ;
       carp $@ . " while closing ptys" if $@ ;
       eval {
-         _debug "closing master fd ", fileno $_ ;
+         _debug "closing master fd ", fileno $_ if _debugging_data;
          close $_ ;
       } ;
       carp $@ . " closing ptys" if $@ ;
@@ -3316,25 +3184,29 @@ sub _cleanup {
    for my $kid ( @{$self->{KIDS}} ) {
       _debug "cleaning up kid ", $kid->{NUM} if _debugging_details ;
       if ( ! length $kid->{PID} ) {
-         _debug 'never ran child ', $kid->{NUM}, ", can't reap" ;
+         _debug 'never ran child ', $kid->{NUM}, ", can't reap"
+            if _debugging;
          for my $op ( @{$kid->{OPS}} ) {
-            _close( $op->{TFD} ) if defined $op->{TFD} ;
+            _close( $op->{TFD} )
+               if defined $op->{TFD} && ! defined $op->{TEMP_FILE_HANDLE};
          }
       }
       elsif ( ! defined $kid->{RESULT} ) {
-         _debug 'reaping child ', $kid->{NUM}, ' (pid ', $kid->{PID}, ')' ;
+         _debug 'reaping child ', $kid->{NUM}, ' (pid ', $kid->{PID}, ')'
+            if _debugging;
          my $pid = waitpid $kid->{PID}, 0 ;
          $kid->{RESULT} = $? ;
-         _debug 'reaped ', $pid, ', $?=', $kid->{RESULT} ;
+         _debug 'reaped ', $pid, ', $?=', $kid->{RESULT}
+            if _debugging;
       }
 
-      ## TODO: Check if DEBUG_FD is still used...
-      if ( defined $kid->{DEBUG_FD} ) {
-         @{$kid->{OPS}} = grep
-            ! defined $_->{KFD} || $_->{KFD} != $kid->{DEBUG_FD},
-            @{$kid->{OPS}} ;
-         $kid->{DEBUG_FD} = undef ;
-      }
+#      if ( defined $kid->{DEBUG_FD} ) {
+#	 die;
+#         @{$kid->{OPS}} = grep
+#            ! defined $_->{KFD} || $_->{KFD} != $kid->{DEBUG_FD},
+#            @{$kid->{OPS}} ;
+#         $kid->{DEBUG_FD} = undef ;
+#      }
 
       _debug "cleaning up filters" if _debugging_details ;
       for my $op ( @{$kid->{OPS}} ) {
@@ -3345,7 +3217,7 @@ sub _cleanup {
       }
 
       for my $op ( @{$kid->{OPS}} ) {
-         $op->{FAKE_PIPE} = undef ;
+         $op->_cleanup( $self ) if UNIVERSAL::isa( $op, "IPC::Run::IO" );
       }
    }
    $self->{STATE} = _finished ;
@@ -3400,7 +3272,8 @@ sub pump {
 
    local $cur_self = $self ;
 
-   _debug "** pumping" ;
+   _debug "** pumping" 
+      if _debugging;
 
 #   my $r = eval {
       $self->start if $self->{STATE} < _started ;
@@ -3413,7 +3286,7 @@ sub pump {
 #   } ;
 #   if ( $@ ) {
 #      my $x = $@ ;
-#      _debug $x if $x ;
+#      _debug $x if _debugging && $x ;
 #      eval { $self->_cleanup } ;
 #      warn $@ if $@ ;
 #      die $x ;
@@ -3503,9 +3376,14 @@ sub reap_nb {
       if ( Win32_MODE ) {
 	 next if ! defined $kid->{PROCESS} || defined $kid->{RESULT} ;
 	 unless ( $kid->{PROCESS}->Wait( 0 ) ) {
-	    _debug "kid $kid->{NUM} ($kid->{PID}) still running" ;
+	    _debug "kid $kid->{NUM} ($kid->{PID}) still running"
+               if _debugging_details;
 	    next ;
 	 }
+
+         _debug "kid $kid->{NUM} ($kid->{PID}) exited"
+            if _debugging;
+
 	 $kid->{PROCESS}->GetExitCode( $kid->{RESULT} )
 	    or croak "$! while GetExitCode()ing for Win32 process" ;
 
@@ -3521,18 +3399,22 @@ sub reap_nb {
 	 next if ! defined $kid->{PID} || defined $kid->{RESULT} ;
 	 my $pid = waitpid $kid->{PID}, POSIX::WNOHANG() ;
 	 unless ( $pid ) {
-	    _debug "$kid->{NUM} ($kid->{PID}) still running" ;
+	    _debug "$kid->{NUM} ($kid->{PID}) still running"
+               if _debugging_details;
 	    next ;
 	 }
 
 	 if ( $pid < 0 ) {
-	    _debug "No such process: $kid->{PID}\n" ;
+	    _debug "No such process: $kid->{PID}\n" if _debugging ;
 	    $kid->{RESULT} = "unknown result, unknown PID" ;
 	 }
 	 else {
+            _debug "kid $kid->{NUM} ($kid->{PID}) exited"
+               if _debugging;
+
 	    confess "waitpid returned the wrong PID: $pid instead of $kid->{PID}"
 	       unless $pid = $kid->{PID} ;
-	    _debug "$kid->{PID} returned $?\n" ;
+	    _debug "$kid->{PID} returned $?\n" if _debugging ;
 	    $kid->{RESULT} = $? ;
 	 }
       }
@@ -3570,7 +3452,7 @@ sub finish {
 
    local $cur_self = $self ;
 
-   _debug "** finishing" ;
+   _debug "** finishing" if _debugging;
 
    $self->{non_blocking}   = 0 ;
    $self->{auto_close_ins} = 1 ;
@@ -4167,35 +4049,37 @@ sub get_more_input() {
    return $r ;
 }
 
-=item filter_tests
 
-   my @tests = filter_tests( "foo", "in", "out", \&filter ) ;
-   $_->() for ( @tests ) ;
-
-This creates a list of test subs that can be used to test most filters
-for basic functionality.  The first parameter is the name of the
-filter to be tested, the second is sample input, the third is the
-test(s) to apply to the output(s), and the rest of the parameters are
-the filters to be linked and tested.
-
-If the filter chain is to be fed multiple inputs in sequence, the second
-parameter should be a reference to an array of thos inputs:
-
-   my @tests = filter_tests( "foo", [qw(1 2 3)], "123", \&filter ) ;
-
-If the filter chain should produce a sequence of outputs, then the
-thrid parameter should be a reference to an array of those outputs:
-
-   my @tests = filter_tests(
-      "foo",
-      "1\n\2\n",
-      [ qr/^1$/, qr/^2$/ ],
-      new_chunker
-   ) ;
-
-See t/run.t and t/filter.t for an example of this in practice.
-
-=cut
+## This is not needed by most users.  Should really move to IPC::Run::TestUtils
+#=item filter_tests
+#
+#   my @tests = filter_tests( "foo", "in", "out", \&filter ) ;
+#   $_->() for ( @tests ) ;
+#
+#This creates a list of test subs that can be used to test most filters
+#for basic functionality.  The first parameter is the name of the
+#filter to be tested, the second is sample input, the third is the
+#test(s) to apply to the output(s), and the rest of the parameters are
+#the filters to be linked and tested.
+#
+#If the filter chain is to be fed multiple inputs in sequence, the second
+#parameter should be a reference to an array of thos inputs:
+#
+#   my @tests = filter_tests( "foo", [qw(1 2 3)], "123", \&filter ) ;
+#
+#If the filter chain should produce a sequence of outputs, then the
+#thrid parameter should be a reference to an array of those outputs:
+#
+#   my @tests = filter_tests(
+#      "foo",
+#      "1\n\2\n",
+#      [ qr/^1$/, qr/^2$/ ],
+#      new_chunker
+#   ) ;
+#
+#See t/run.t and t/filter.t for an example of this in practice.
+#
+#=cut
 
 ##
 ## Filter testing routines

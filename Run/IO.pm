@@ -78,17 +78,8 @@ use Fcntl ;
 use Symbol ;
 use UNIVERSAL qw( isa ) ;
 
-require IPC::Run ;
-
-sub Win32_MODE() ;
-
-BEGIN {
-   *Win32_MODE = \&IPC::Run::Win32_MODE ;
-   if ( Win32_MODE ) {
-      eval "use IPC::Run::Win32Helper ; 1;"
-         or ( $@ && die ) or die "$!" ;
-   }
-}
+use IPC::Run::Debug;
+use IPC::Run qw( Win32_MODE );
 
 use fields (
     'TYPE',             # Directionality
@@ -110,27 +101,26 @@ use fields (
 
     'KIN_REF',          # Refers to the input value, whether it's an externally
                         # supplied SCALAR, or the output buffer for an
-			# externally supplied CODE ref.
+        		# externally supplied CODE ref.
     'TRUNC',            # Whether or not to truncate the output file if a
                         # named file is passed.
     'HARNESS',          # Temporarily set to the IPC::Run instance that
                         # called us while we're doing filters.  Unset to
-			# prevent circrefs.
+        		# prevent circrefs.
     'FAKE_PIPE',        # Used to hold the "fake pipe" objects on Win32,
                         # since Win32 requires a lot of extra monkey business.
     'BINMODE',          # If you want all the data on Win32...
 ) ;
 
+BEGIN {
+   if ( Win32_MODE ) {
+      eval "use IPC::Run::Win32Helper; require IPC::Run::Win32IO; 1"
+         or ( $@ && die ) or die "$!" ;
+   }
+}
+
 sub _empty($) ;
 
-##
-## some overly-friendly imports
-##
-sub _debug ;
-sub _debugging_data ();
-
-*_debug          = \&IPC::Run::_debug ;
-*_debugging_data = \&IPC::Run::_debugging_data ;
 *_empty          = \&IPC::Run::_empty ;
 
 
@@ -168,6 +158,9 @@ sub _new_internal {
    my $class = shift ;
    $class = ref $class || $class ;
 
+   $class = "IPC::Run::Win32IO"
+      if Win32_MODE && $class eq "IPC::Run::IO";
+
    my IPC::Run::IO $self ;
    {
       no strict 'refs' ;
@@ -190,71 +183,71 @@ sub _new_internal {
       croak "'$_' missing a destination" if _empty $internal ;
       $self->{DEST} = $internal ;
       if ( isa( $self->{DEST}, 'CODE' ) ) {
-	 ## Put a filter on the end of the filter chain to pass the
-	 ## output on to the CODE ref.  For SCALAR refs, the last
-	 ## filter in the chain writes directly to the scalar itself.  See
-	 ## _init_filters().  For CODE refs, however, we need to adapt from
-	 ## the SCALAR to calling the CODE.
-	 unshift( 
-	    @{$self->{FILTERS}},
-	    sub {
-	       my ( $in_ref ) = @_ ;
+         ## Put a filter on the end of the filter chain to pass the
+         ## output on to the CODE ref.  For SCALAR refs, the last
+         ## filter in the chain writes directly to the scalar itself.  See
+         ## _init_filters().  For CODE refs, however, we need to adapt from
+         ## the SCALAR to calling the CODE.
+         unshift( 
+            @{$self->{FILTERS}},
+            sub {
+               my ( $in_ref ) = @_ ;
 
-	       return IPC::Run::input_avail() && do {
-		  $self->{DEST}->( $$in_ref ) ;
-		  $$in_ref = '' ;
-		  1 ;
-	       }
-	    }
-	 ) ;
+               return IPC::Run::input_avail() && do {
+        	  $self->{DEST}->( $$in_ref ) ;
+        	  $$in_ref = '' ;
+        	  1 ;
+               }
+            }
+         ) ;
       }
    }
    else {
       croak "'$_' missing a source" if _empty $internal ;
       $self->{SOURCE} = $internal ;
       if ( isa( $internal, 'CODE' ) ) {
-	 push(
-	    @{$self->{FILTERS}},
-	    sub {
-	       my ( $in_ref, $out_ref ) = @_ ;
-	       return 0 if length $$out_ref ;
+         push(
+            @{$self->{FILTERS}},
+            sub {
+               my ( $in_ref, $out_ref ) = @_ ;
+               return 0 if length $$out_ref ;
 
-	       return undef
-		  if $self->{SOURCE_EMPTY} ;
+               return undef
+        	  if $self->{SOURCE_EMPTY} ;
 
-	       my $in = $internal->() ;
-	       unless ( defined $in ) {
-		  $self->{SOURCE_EMPTY} = 1 ;
-		  return undef 
-	       }
-	       return 0 unless length $in ;
-	       $$out_ref = $in ;
+               my $in = $internal->() ;
+               unless ( defined $in ) {
+        	  $self->{SOURCE_EMPTY} = 1 ;
+        	  return undef 
+               }
+               return 0 unless length $in ;
+               $$out_ref = $in ;
 
-	       return 1 ;
-	    }
-	 ) ;
+               return 1 ;
+            }
+         ) ;
       }
       elsif ( isa( $internal, 'SCALAR' ) ) {
-	 push(
-	    @{$self->{FILTERS}},
-	    sub {
-	       my ( $in_ref, $out_ref ) = @_ ;
-	       return 0 if length $$out_ref ;
+         push(
+            @{$self->{FILTERS}},
+            sub {
+               my ( $in_ref, $out_ref ) = @_ ;
+               return 0 if length $$out_ref ;
 
-	       ## pump() clears auto_close_ins, finish() sets it.
-	       return $self->{HARNESS}->{auto_close_ins} ? undef : 0
-		  if IPC::Run::_empty ${$self->{SOURCE}}
-		     || $self->{SOURCE_EMPTY} ;
+               ## pump() clears auto_close_ins, finish() sets it.
+               return $self->{HARNESS}->{auto_close_ins} ? undef : 0
+        	  if IPC::Run::_empty ${$self->{SOURCE}}
+        	     || $self->{SOURCE_EMPTY} ;
 
-	       $$out_ref = $$internal ;
-	       eval { $$internal = '' }
-		  if $self->{HARNESS}->{clear_ins} ;
+               $$out_ref = $$internal ;
+               eval { $$internal = '' }
+        	  if $self->{HARNESS}->{clear_ins} ;
 
-	       $self->{SOURCE_EMPTY} = $self->{HARNESS}->{auto_close_ins} ;
+               $self->{SOURCE_EMPTY} = $self->{HARNESS}->{auto_close_ins} ;
 
-	       return 1 ;
-	    }
-	 ) ;
+               return 1 ;
+            }
+         ) ;
       }
    }
 
@@ -298,12 +291,12 @@ sub init {
    }
    else {
       @{$self->{FBUFS}} = map {
-	 my $s = "" ;
-	 \$s ;
+         my $s = "" ;
+         \$s ;
       } ( @{$self->{FILTERS}}, '' ) ;
 
       $self->{FBUFS}->[0] = $self->{DEST}
-	 if $self->{DEST} && ref $self->{DEST} eq 'SCALAR' ;
+         if $self->{DEST} && ref $self->{DEST} eq 'SCALAR' ;
       push @{$self->{FBUFS}}, $self->{SOURCE} ;
    }
 
@@ -340,7 +333,7 @@ sub open {
       $self->filename,
       $open_flags{$self->op},
    ) or croak
-	 "IPC::Run::IO: $! opening '$self->{FILENAME}', mode '" . $self->mode . "'" ;
+         "IPC::Run::IO: $! opening '$self->{FILENAME}', mode '" . $self->mode . "'" ;
 
    return undef ;
 }
@@ -348,46 +341,51 @@ sub open {
 
 =item open_pipe
 
-If this is a redirection IO object, this opens the pipe in a platform-independant
-manner.
+If this is a redirection IO object, this opens the pipe in a platform
+independant manner.
 
 =cut
 
+sub _do_open {
+   my $self = shift;
+   my ( $child_debug_fd, $parent_handle ) = @_ ;
+
+
+   if ( $self->dir eq "<" ) {
+      ( $self->{TFD}, $self->{FD} ) = IPC::Run::_pipe_nb ;
+      if ( $parent_handle ) {
+         CORE::open $parent_handle, ">&=$self->{FD}"
+            or croak "$! duping write end of pipe for caller" ;
+      }
+   }
+   else {
+      ( $self->{FD}, $self->{TFD} ) = IPC::Run::_pipe ;
+      if ( $parent_handle ) {
+         CORE::open $parent_handle, "<&=$self->{FD}"
+            or croak "$! duping read end of pipe for caller" ;
+      }
+   }
+}
+
 sub open_pipe {
    my IPC::Run::IO $self = shift ;
-   my ( $child_debug_fd, $parent_handle ) = @_ ;
 
    ## Hmmm, Maybe allow named pipes one day.  But until then...
    croak "IPC::Run::IO: Can't pipe() when a file name has been set"
       if defined $self->{FILENAME} ;
 
-   my $dir = $self->dir ;
+   $self->_do_open( @_ );
 
-   if ( Win32_MODE ) {
-      ( $self->{FAKE_PIPE}, $self->{FD}, $self->{TFD} ) =
-         win32_fake_pipe(
-            $self->dir, $child_debug_fd, $parent_handle, 
-            $self->binmode() ) ;
-   }
-   else {
-      if ( $dir eq "<" ) {
-         ( $self->{TFD}, $self->{FD} ) = IPC::Run::_pipe_nb ;
-	 if ( $parent_handle ) {
-	    CORE::open $parent_handle, ">&=$self->{FD}"
-	       or croak "$! duping write end of pipe for caller" ;
-	 }
-      }
-      else {
-         ( $self->{FD}, $self->{TFD} ) = IPC::Run::_pipe ;
-	 if ( $parent_handle ) {
-	    CORE::open $parent_handle, "<&=$self->{FD}"
-	       or croak "$! duping read end of pipe for caller" ;
-	 }
-      }
-   }
+   ## return ( child_fd, parent_fd )
+   return $self->dir eq "<"
+      ? ( $self->{TFD}, $self->{FD} )
+      : ( $self->{FD}, $self->{TFD} ) ;
+}
 
-   return $dir eq "<" ? ( $self->{TFD}, $self->{FD} )
-                      : ( $self->{FD}, $self->{TFD} ) ;
+
+sub _cleanup { ## Called from Run.pm's _cleanup
+   my $self = shift;
+   undef $self->{FAKE_PIPE};
 }
 
 
@@ -403,12 +401,12 @@ sub close {
 
    if ( defined $self->{HANDLE} ) {
       close $self->{HANDLE}
-	 or croak(  "IPC::Run::IO: $! closing "
-	    . ( defined $self->{FILENAME}
-	       ? "'$self->{FILENAME}'"
-	       : "handle"
-	    )
-	 ) ;
+         or croak(  "IPC::Run::IO: $! closing "
+            . ( defined $self->{FILENAME}
+               ? "'$self->{FILENAME}'"
+               : "handle"
+            )
+         ) ;
    }
    else {
       IPC::Run::_close( $self->{FD} ) ;
@@ -432,9 +430,9 @@ sub fileno {
    my $fd = fileno $self->{HANDLE} ;
    croak(  "IPC::Run::IO: $! "
          . ( defined $self->{FILENAME}
-	    ? "'$self->{FILENAME}'"
-	    : "handle"
-	 )
+            ? "'$self->{FILENAME}'"
+            : "handle"
+         )
       ) unless defined $fd ;
 
    return $fd ;
@@ -547,6 +545,30 @@ confess "\$self not an IPC::Run::IO" unless isa( $self, "IPC::Run::IO" ) ;
    push @{$self->{FBUFS}}, $self->{SOURCE} ;
 }
 
+
+sub poll {
+   my IPC::Run::IO $self = shift;
+   my ( $harness ) = @_;
+
+   if ( defined $self->{FD} ) {
+      my $d = $self->dir;
+      if ( $d eq "<" ) {
+         if ( vec $harness->{WOUT}, $self->{FD}, 1 ) {
+            _debug_desc_fd( "filtering data to", $self )
+               if _debugging_details ;
+            return $self->_do_filters( $harness );
+         }
+      }
+      elsif ( $d eq ">" ) {
+         if ( vec $harness->{ROUT}, $self->{FD}, 1 ) {
+            _debug_desc_fd( "filtering data from", $self )
+               if _debugging_details ;
+            return $self->_do_filters( $harness );
+         }
+      }
+   }
+   return 0;
+}
 
 
 sub _do_filters {

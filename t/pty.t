@@ -10,6 +10,7 @@ use strict ;
 
 use Test ;
 
+use IPC::Run::Debug qw( _map_fds );
 use IPC::Run qw( start pump finish ) ;
 use UNIVERSAL qw( isa ) ;
 
@@ -62,8 +63,6 @@ my $fd_map ;
 
 my $text = "hello world\n" ;
 
-sub map_fds() { &IPC::Run::_map_fds }
-
 ## TODO: test lots of mixtures of pty's and pipes & files.  Use run().
 
 ## Older Perls can't ok( a, qr// ), so I manually do that here.
@@ -76,7 +75,7 @@ my @tests = (
 sub {
    $out = 'REPLACE ME' ;
    $? = 99 ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $h = start \@echoer, '<pty<', \$in, '>', \$out, '2>', \$err ;
 
    $in  = "hello\n" ;
@@ -107,7 +106,7 @@ sub {
    ok( $h->finish ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
 ##
 ## stdout, stderr
@@ -115,7 +114,7 @@ sub { ok( map_fds, $fd_map ) },
 sub {
    $out = 'REPLACE ME' ;
    $? = 99 ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $h = start \@echoer, \$in, '>pty>', \$out ;
    $in  = "hello\n" ;
    $? = 0 ;
@@ -140,7 +139,7 @@ sub {
    ok( $h->finish ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
 ##
 ## stdout only
@@ -148,7 +147,7 @@ sub { ok( map_fds, $fd_map ) },
 sub {
    $out = 'REPLACE ME' ;
    $? = 99 ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $h = start \@echoer, \$in, '>pty>', \$out, '2>', \$err ;
    $in  = "hello\n" ;
    $? = 0 ;
@@ -180,7 +179,7 @@ sub {
    ok( $h->finish ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
 ##
 ## stdin, stdout, stderr
@@ -188,7 +187,7 @@ sub { ok( map_fds, $fd_map ) },
 sub {
    $out = 'REPLACE ME' ;
    $? = 99 ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $h = start \@echoer, '<pty<', \$in, '>pty>', \$out ;
    $in  = "hello\n" ;
    $? = 0 ;
@@ -213,7 +212,7 @@ sub {
    ok( $h->finish ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 ) ;
 
 plan tests => scalar @tests ;

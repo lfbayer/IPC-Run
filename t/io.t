@@ -11,6 +11,7 @@ use strict ;
 use Test ;
 
 use IPC::Run qw( :filters run io ) ;
+use IPC::Run::Debug qw( _map_fds );
 use UNIVERSAL qw( isa ) ;
 
 sub skip_unless_select (&) {
@@ -42,7 +43,6 @@ my $io ;
 my $r ;
 
 my $fd_map ;
-sub map_fds() { &IPC::Run::_map_fds }
 
 ## TODO: Test filters, etc.
 
@@ -75,7 +75,7 @@ my @tests = (
 ##
 sub {
    $io = io( 'foo', '<', \$send ) ;
-   ok( ref $io, 'IPC::Run::IO' ) ;
+   ok isa $io, 'IPC::Run::IO' ;
 },
 
 sub { ok( io( 'foo', '<',  \$send  )->mode, 'w'  ) },
@@ -89,13 +89,13 @@ sub { ok( io( 'foo', '>>', \$recv  )->mode, 'ra' ) },
 skip_unless_select {
    spit $in_file, $text ;
    $recv = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run io( $in_file, '>', \$recv ) ;
    wipe $in_file ;
    ok( $r ) ;
 },
 skip_unless_select { ok( ! $? ) },
-skip_unless_select { ok( map_fds, $fd_map ) },
+skip_unless_select { ok( _map_fds, $fd_map ) },
 
 skip_unless_select { ok( $recv, $text ) },
 
@@ -105,14 +105,14 @@ skip_unless_select { ok( $recv, $text ) },
 skip_unless_select {
    wipe $out_file ;
    $send = $text ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run io( $out_file, '<', \$send ) ;
    $recv = slurp $out_file ;
    wipe $out_file ;
    ok( $r ) ;
 },
 skip_unless_select { ok( ! $? ) },
-skip_unless_select { ok( map_fds, $fd_map ) },
+skip_unless_select { ok( _map_fds, $fd_map ) },
 
 skip_unless_select { ok( $send, $text ) },
 skip_unless_select { ok( $recv, $text ) },

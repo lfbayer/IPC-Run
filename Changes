@@ -1,8 +1,40 @@
 Revision history for Perl extension IPC::Run
 
+0.70 Fri Apr 26 10:15:13 EDT 2002
+   - Massive performance improvements on Win32 See IPC::Run::Win32Helper's
+     optimize() documentation.
+     - moved data pump routine to IPC::Run::Win32Pump, now it loads much
+       faster.
+     - Where reasonably safe to do so, temporary files are used instead of
+       pipes+pumps.
+     - Setting $ENV{IPCRUNDEBUG}="notopt" can help find opportunities for
+       optimizing.  See IPC::Run::Debug for details.
+   - Added 'noinherit => 1' option (parsed like 'debug => "basic") to
+     allow stdin, stdout, and stderr to not be inherited by the child.
+   - Factored debugging out in to IPC::Run::Debug so Win32Pump.pm need not load
+     IPC::Run to get it.
+   - Debugging code can be compile-time optimized away by setting
+     $ENV{IPCRUNDEBUG} = "none" (or 0) before IPC::Run::Debug is first loaded
+     causes all _debug... code to be optimized away before runtime.
+   - Moved some functionality from IPC::Run in to IPC::Run::IO to allow
+     IPC::Run::Win32IO to alter IPC::Run's behavior.  More of this should
+     happen; IPC::Run has grown too bloaty.
+   - All the hokey hacky "manual imports" of IPC::Run's old _debug...()
+     functions has been replaced by "use IPC::Run::Debug".
+   - All the hokey hacky "manual imports" of IPC::Run's Win32_MODE()
+     constant has been replaced by importing it from IPC::Run.
+   - Cleaned up IPC::Run::Win32*'s debugging levels a bit to unclutter
+     "basic" and "data" debugging level output.
+   - exception handling in _open_pipes no longer silently eats exceptions.
+
+0.67 Fri Apr 19 12:14:02 EDT 2002
+   - remove _q from the examples in the POD - it was inconsistent (the
+     examples had bugs) and didn't help readability.  Spotted by
+     B.Rowlingson@lancaster.ac.uk.
+
 0.66 Wed Mar 27 07:42:27 EST 2002
    - Really dumb down that bad file descriptor test last tweaked in 0.64;
-   the CLI does not script well under internationalization.
+     the CLI does not script well under internationalization.
 
 0.65 (unreleased)
    - Win32

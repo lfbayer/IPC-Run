@@ -20,68 +20,32 @@ contact me at barries@slaysys.com, thanks!.
 @ISA = qw( Exporter ) ;
 
 @EXPORT = qw(
-   win32_fake_pipe
    win32_spawn
    win32_parse_cmd_line
-   _pump
    _dont_inherit
+   _inherit
 ) ;
 
 use strict ;
 use Carp ;
 use IO::Handle ;
 #use IPC::Open3 ();
-use Socket ;
 require POSIX ;
 
 ## Work around missing prototypes in old Socket.pm versions
 sub Socket::IPPROTO_TCP() ;
 sub Socket::TCP_NODELAY() ;
 
-use Socket qw( IPPROTO_TCP TCP_NODELAY ) ;
-use Symbol ;
 use Text::ParseWords ;
 use Win32::Process ;
+use IPC::Run::Debug;
 ## REMOVE OSFHandleOpen
 use Win32API::File qw(
-   GetOsFHandle
-   OsFHandleOpenFd
-   OsFHandleOpen
    FdGetOsFHandle
    SetHandleInformation
    HANDLE_FLAG_INHERIT
    INVALID_HANDLE_VALUE
 ) ;
-
-
-
-BEGIN {
-   ## Force AUTOLOADED constants to be, well, constant by getting them
-   ## to AUTOLOAD before compilation continues.  Sigh.
-   SOL_SOCKET;
-   SO_REUSEADDR;
-   IPPROTO_TCP;
-   TCP_NODELAY;
-   HANDLE_FLAG_INHERIT;
-   INVALID_HANDLE_VALUE;
-}
-
-
-## We need to prototype these so they don't conflict.
-sub _debug ;
-sub _debugging_details() ;
-sub _debugging_gory_details() ;
-
-## Sometimes, Win32Helper.pm is loaded first (in the pumpers), and it
-## loads IPC::Run.  We need to forward declare these to prevent warnings
-## in that case.
-
-sub IPC::Run::_debugging_details() ;
-sub IPC::Run::_debugging_gory_details() ;
-
-*_debug                  = \&IPC::Run::_debug ;
-*_debugging_details      = \&IPC::Run::_debugging_details ;
-*_debugging_gory_details = \&IPC::Run::_debugging_gory_details ;
 
 ## Takes an fd or a GLOB ref, never never never a Win32 handle.
 sub _dont_inherit {
@@ -125,341 +89,229 @@ sub _inherit {       #### REMOVE
 
 =cut
 
-=item win32_fake_pipe
+=item optimize()
 
-    $fake_pipe = win32_fake_pipe ;
+Most common incantations of C<run()> (I<not> C<harness()>, C<start()>,
+or C<finish()) now use temporary files to redirect input and output
+instead of pumper processes.
 
-Just a safe wrapper around listen(). Chooses a port number >= 2048
-to listen on. Call $fake_pipe->parent_handle() after spawning
-the children to do the accept() and get a valid "pipe" handle.
+Temporary files are used when sending to child processes if input is
+taken from a scalar with no filter subroutines.  This is the only time
+we can assume that the parent is not interacting with the child's
+redirected input as it runs.
 
-We need to build an IPC::Run::Pipe class and make a 
-IPC::Run::Pipe::Win32tcp subclass of it, I think.
+Temporary files are used when receiving from children when output is
+to a scalar or subroutine with or without filters, but only if
+the child in question closes its inputs or takes input from 
+unfiltered SCALARs or named files.  Normally, a child inherits its STDIN
+from its parent; to close it, use "0<&-" or the C<noinherit => 1> option.
+If data is sent to the child from CODE refs, filehandles or from
+scalars through filters than the child's outputs will not be optimized
+because C<optimize()> assumes the parent is interacting with the child.
+It is ok if the output is filtered or handled by a subroutine, however.
+
+This assumes that all named files are real files (as opposed to named
+pipes) and won't change; and that a process is not communicating with
+the child indirectly (through means not visible to IPC::Run).
+These can be an invalid assumptions, but are the 99% case.
+Write me if you need an option to enable or disable optimizations; I
+suspect it will work like the C<binary()> modifier.
+
+To detect cases that you might want to optimize by closing inputs, try
+setting the C<IPCRUNDEBUG> environment variable to the special C<notopt>
+value:
+
+   C:> set IPCRUNDEBUG=notopt
+   C:> my_app_that_uses_IPC_Run.pl
+
+=item optimizer() rationalizations
+
+Only for that limited case can we be sure that it's ok to batch all the
+input in to a temporary file.  If STDIN is from a SCALAR or from a named
+file or filehandle (again, only in C<run()>), then outputs to CODE refs
+are also assumed to be safe enough to batch through a temp file,
+otherwise only outputs to SCALAR refs are batched.  This can cause a bit
+of grief if the parent process benefits from or relies on a bit of
+"early returns" coming in before the child program exits.  As long as
+the output is redirected to a SCALAR ref, this will not be visible.
+When output is redirected to a subroutine or (deprecated) filters, the
+subroutine will not get any data until after the child process exits,
+and it is likely to get bigger chunks of data at once.
+
+The reason for the optimization is that, without it, "pumper" processes
+are used to overcome the inconsistancies of the Win32 API.  We need to
+use anonymous pipes to connect to the child processes' stdin, stdout,
+and stderr, yet select() does not work on these.  select() only works on
+sockets on Win32.  So for each redirected child handle, there is
+normally a "pumper" process that connects to the parent using a
+socket--so the parent can select() on that fd--and to the child on an
+anonymous pipe--so the child can read/write a pipe.
+
+Using a socket to connect directly to the child (as at least one MSDN
+article suggests) seems to cause the trailing output from most children
+to be lost.  I think this is because child processes rarely close their
+stdout and stderr explicitly, and the winsock dll does not seem to flush
+output when a process that uses it exits without explicitly closing
+them.
+
+Because of these pumpers and the inherent slowness of Win32
+CreateProcess(), child processes with redirects are quite slow to
+launch; so this routine looks for the very common case of
+reading/writing to/from scalar references in a run() routine and
+converts such reads and writes in to temporary file reads and writes.
+
+Such files are marked as FILE_ATTRIBUTE_TEMPORARY to increase speed and
+as FILE_FLAG_DELETE_ON_CLOSE so it will be cleaned up when the child
+process exits (for input files).  The user's default permissions are
+used for both the temporary files and the directory that contains them,
+hope your Win32 permissions are secure enough for you.  Files are
+created with the Win32API::File defaults of
+FILE_SHARE_READ|FILE_SHARE_WRITE.
+
+Setting the debug level to "details" or "gory" will give detailed
+information about the optimization process; setting it to "basic" or
+higher will tell whether or not a given call is optimized.  Setting
+it to "notopt" will highligh those calls that aren't optimized.
 
 =cut
 
-## _pump is only called in other processes, not in the parent process.  If
-## it were any bigger, I'd compile it on-the-fly or move it to a separate
-## package.  As it it, I don't think it takes up much unused space in the 
-## parent.  Can move it to a separate module later to make loading it faster
-## in the children (it needs almost no other modules).
-sub _pump {
-   require IPC::Run ;
-   my ( $stdin_fh, $stdout_fh, $debug_fh, $parent_pid, $parent_start_time, $debug, $child_label ) = @ARGV ;
+sub optimize {
+   my ( $h ) = @_;
 
-   ## For some reason these get created with binmode on.  AAargh, gotta       #### REMOVE
-   ## do it by hand below.       #### REMOVE
-   if ( $debug ) {       #### REMOVE
-      close STDERR;       #### REMOVE
-      OsFHandleOpen( \*STDERR, $debug_fh, "w" )       #### REMOVE
-	 or print "$! opening STDERR as Win32 handle $debug_fh in pumper $$" ;       #### REMOVE
-   }       #### REMOVE
-   close STDIN;       #### REMOVE
-   OsFHandleOpen( \*STDIN, $stdin_fh, "r" )       #### REMOVE
-      or die "$! opening STDIN as Win32 handle $stdin_fh in pumper $$" ;       #### REMOVE
-   close STDOUT;       #### REMOVE
-   OsFHandleOpen( \*STDOUT, $stdout_fh, "w" )       #### REMOVE
-      or die "$! opening STDOUT as Win32 handle $stdout_fh in pumper $$" ;       #### REMOVE
+   my @kids = @{$h->{KIDS}};
 
-   binmode STDIN;
-   binmode STDOUT;
-   $| = 1 ;
-   select STDERR ; $| = 1 ; select STDOUT ;
+   my $saw_pipe;
 
-   $child_label ||= "pump" ;
-   IPC::Run::_debug_init(
-      $parent_pid,
-      $parent_start_time,
-      $debug,
-      fileno STDERR,
-      $child_label,
-   ) ;
+   my ( $ok_to_optimize_outputs, $veto_output_optimization );
 
-   _debug "Entered" if _debugging_details ;
+   for my $kid ( @kids ) {
+      ( $ok_to_optimize_outputs, $veto_output_optimization ) = ()
+         unless $saw_pipe;
 
+      _debug
+         "Win32 optimizer: (kid $kid->{NUM}) STDIN piped, carrying over ok of non-SCALAR output optimization"
+         if _debugging_details && $ok_to_optimize_outputs;
+      _debug
+         "Win32 optimizer: (kid $kid->{NUM}) STDIN piped, carrying over veto of non-SCALAR output optimization"
+         if _debugging_details && $veto_output_optimization;
 
-   # No need to close all fds; win32 doesn't seem to pass any on to us.
-   $| = 1 ;
-   my $buf ;
-   my $total_count = 0 ;
-   while (1) {
-      my $count = sysread STDIN, $buf, 10_000 ;
-      last unless $count ;
-      if ( _debugging_gory_details ) {
-	 my $msg = "'$buf'" ;
-	 substr( $msg, 100, -1 ) = '...' if length $msg > 100 ;
-	 $msg =~ s/\n/\\n/g ;
-	 $msg =~ s/\r/\\r/g ;
-	 $msg =~ s/\t/\\t/g ;
-	 $msg =~ s/([\000-\037\177-\277])/sprintf "\0x%02x", ord $1/eg ;
-	 _debug sprintf( "%5d chars revc: ", $count ), $msg ;
+      if ( $h->{noinherit} && ! $ok_to_optimize_outputs ) {
+	 _debug
+	    "Win32 optimizer: (kid $kid->{NUM}) STDIN not inherited from parent oking non-SCALAR output optimization"
+	    if _debugging_details && $ok_to_optimize_outputs;
+	 $ok_to_optimize_outputs = 1;
       }
-      $total_count += $count ;
-      if ( _debugging_gory_details ) {
-	 my $msg = "'$buf'" ;
-	 substr( $msg, 100, -1 ) = '...' if length $msg > 100 ;
-	 $msg =~ s/\n/\\n/g ;
-	 $msg =~ s/\r/\\r/g ;
-	 $msg =~ s/\t/\\t/g ;
-	 $msg =~ s/([\000-\037\177-\277])/sprintf "\0x%02x", ord $1/eg ;
-	 _debug sprintf( "%5d chars sent: ", $count ), $msg ;
+
+      for ( @{$kid->{OPS}} ) {
+         if ( substr( $_->{TYPE}, 0, 1 ) eq "<" ) {
+            if ( $_->{TYPE} eq "<" ) {
+	       if ( @{$_->{FILTERS}} > 1 ) {
+		  ## Can't assume that the filters are idempotent.
+	       }
+               elsif ( ref $_->{SOURCE} eq "SCALAR"
+	          || ref $_->{SOURCE} eq "GLOB"
+		  || UNIVERSAL::isa( $_, "IO::Handle" )
+	       ) {
+                  if ( $_->{KFD} == 0 ) {
+                     _debug
+                        "Win32 optimizer: (kid $kid->{NUM}) 0$_->{TYPE}",
+                        ref $_->{SOURCE},
+                        ", ok to optimize outputs"
+                        if _debugging_details;
+                     $ok_to_optimize_outputs = 1;
+                  }
+                  $_->{SEND_THROUGH_TEMP_FILE} = 1;
+                  next;
+               }
+               elsif ( ! ref $_->{SOURCE} && defined $_->{SOURCE} ) {
+                  if ( $_->{KFD} == 0 ) {
+                     _debug
+                        "Win32 optimizer: (kid $kid->{NUM}) 0<$_->{SOURCE}, ok to optimize outputs",
+                        if _debugging_details;
+                     $ok_to_optimize_outputs = 1;
+                  }
+                  next;
+               }
+            }
+            _debug
+               "Win32 optimizer: (kid $kid->{NUM}) ",
+               $_->{KFD},
+               $_->{TYPE},
+               defined $_->{SOURCE}
+                  ? ref $_->{SOURCE}      ? ref $_->{SOURCE}
+                                          : $_->{SOURCE}
+                  : defined $_->{FILENAME}
+                                          ? $_->{FILENAME}
+                                          : "",
+	       @{$_->{FILTERS}} > 1 ? " with filters" : (),
+               ", VETOING output opt."
+               if _debugging_details || _debugging_not_optimized;
+            $veto_output_optimization = 1;
+         }
+         elsif ( $_->{TYPE} eq "close" && $_->{KFD} == 0 ) {
+            $ok_to_optimize_outputs = 1;
+            _debug "Win32 optimizer: (kid $kid->{NUM}) saw 0<&-, ok to optimize outputs"
+               if _debugging_details;
+         }
+         elsif ( $_->{TYPE} eq "dup" && $_->{KFD2} == 0 ) {
+            $veto_output_optimization = 1;
+            _debug "Win32 optimizer: (kid $kid->{NUM}) saw 0<&$_->{KFD2}, VETOING output opt."
+               if _debugging_details || _debugging_not_optimized;
+         }
+         elsif ( $_->{TYPE} eq "|" ) {
+            $saw_pipe = 1;
+         }
       }
-      print $buf ;
-   }
 
-   _debug "Exiting, transferred $total_count chars" if _debugging_details ;
+      if ( ! $ok_to_optimize_outputs && ! $veto_output_optimization ) {
+         _debug
+            "Win32 optimizer: (kid $kid->{NUM}) child STDIN not redirected, VETOING non-SCALAR output opt."
+            if _debugging_details || _debugging_not_optimized;
+         $veto_output_optimization = 1;
+      }
 
-   ## Perform a graceful socket shutdown.  Windows defaults to SO_DONTLINGER,
-   ## which should cause a "graceful shutdown in the background" on sockets.
-   ## but that's only true if the process closes the socket manually, it
-   ## seems; if the process exits and lets the OS clean up, the OS is not
-   ## so kind.  STDOUT is not always a socket, of course, but it won't hurt
-   ## to close a pipe and may even help.  With a closed source OS, who
-   ## can tell?
-   ##
-   ## In any case, this close() is one of the main reasons we have helper
-   ## processes; if the OS closed socket fds gracefully when an app exits,
-   ## we'd just redirect the client directly to what is now the pump end 
-   ## of the socket.  As it is, however, we need to let the client play with
-   ## pipes, which don't have the abort-on-app-exit behavior, and then
-   ## adapt to the sockets in the helper processes to allow the parent to
-   ## select.
-   ##
-   ## Possible alternatives / improvements:
-   ## 
-   ## 1) use helper threads instead of processes.  I don't trust perl's threads
-   ## as of 5.005 or 5.6 enough (which may be myopic of me).
-   ##
-   ## 2) figure out if/how to get at WaitForMultipleObjects() with pipe
-   ## handles.  May be able to take the Win32 handle and pass it to 
-   ## Win32::Event::wait_any, dunno.
-   ## 
-   ## 3) Use Inline::C or a hand-tooled XS module to do helper threads.
-   ## This would be faster than #1, but would require a ppm distro.
-   ##
-   close STDOUT ;
-   close STDERR ;
-}
+      if ( $ok_to_optimize_outputs && $veto_output_optimization ) {
+         $ok_to_optimize_outputs = 0;
+         _debug "Win32 optimizer: (kid $kid->{NUM}) non-SCALAR output optimizations VETOed"
+            if _debugging_details || _debugging_not_optimized;
+      }
 
-## When threaded Perls get good enough, we should use threads here.
-## The problem with threaded perls is that they dup() all sorts of
-## filehandles and fds and don't allow sufficient control over
-## closing off the ones we don't want.
+      ## SOURCE/DEST ARRAY means it's a filter.
+      ## TODO: think about checking to see if the final input/output of
+      ## a filter chain (an ARRAY SOURCE or DEST) is a scalar...but
+      ## we may be deprecating filters.
 
-sub _spawn_pumper {
-   my ( $stdin, $stdout, $debug_fd, $child_label, @opts ) = @_ ;
-   my ( $stdin_fd, $stdout_fd ) = ( fileno $stdin, fileno $stdout ) ;
-
-   _debug "pumper stdin = ", $stdin_fd;
-   _debug "pumper stdout = ", $stdout_fd;
-   _inherit $stdin_fd, $stdout_fd, $debug_fd ;
-   my @I_options = map qq{"-I$_"}, @INC;
-
-   my $cmd_line = join( " ",
-      qq{"$^X"},
-      @I_options,
-      qw(-MIPC::Run::Win32Helper -e _pump ),
-## I'm using this clunky way of passing filehandles to the child process
-## in order to avoid some kind of premature closure of filehandles
-## problem I was having with VCP's test suite when passing them
-## via CreateProcess.  All of the ## REMOVE code is stuff I'd like
-## to be rid of and the ## ADD code is what I'd like to use.
-      FdGetOsFHandle( $stdin_fd ), ## REMOVE
-      FdGetOsFHandle( $stdout_fd ), ## REMOVE
-      FdGetOsFHandle( $debug_fd ), ## REMOVE
-      $$, $^T, IPC::Run::_debugging_level(), qq{"$child_label"},
-      @opts
-   ) ;
-
-#   open SAVEIN,  "<&STDIN"  or croak "$! saving STDIN" ;       #### ADD
-#   open SAVEOUT, ">&STDOUT" or croak "$! saving STDOUT" ;       #### ADD
-#   open SAVEERR, ">&STDERR" or croak "$! saving STDERR" ;       #### ADD
-#   _dont_inherit \*SAVEIN ;       #### ADD
-#   _dont_inherit \*SAVEOUT ;       #### ADD
-#   _dont_inherit \*SAVEERR ;       #### ADD
-#   open STDIN,  "<&$stdin_fd"  or croak "$! dup2()ing $stdin_fd (pumper's STDIN)" ;       #### ADD
-#   open STDOUT, ">&$stdout_fd" or croak "$! dup2()ing $stdout_fd (pumper's STDOUT)" ;       #### ADD
-#   open STDERR, ">&$debug_fd" or croak "$! dup2()ing $debug_fd (pumper's STDERR/debug_fd)" ;       #### ADD
-
-   _debug "pump cmd line: ", $cmd_line ;
-
-   my $process ;
-   Win32::Process::Create( 
-      $process,
-      $^X,
-      $cmd_line,
-      1,  ## Inherit handles
-      NORMAL_PRIORITY_CLASS,
-      ".",
-   ) or croak "$!: Win32::Process::Create()" ;
-
-#   open STDIN,  "<&SAVEIN"  or croak "$! restoring STDIN" ;       #### ADD
-#   open STDOUT, ">&SAVEOUT" or croak "$! restoring STDOUT" ;       #### ADD
-#   open STDERR, ">&SAVEERR" or croak "$! restoring STDERR" ;       #### ADD
-#   close SAVEIN             or croak "$! closing SAVEIN" ;       #### ADD
-#   close SAVEOUT            or croak "$! closing SAVEOUT" ;       #### ADD
-#   close SAVEERR            or croak "$! closing SAVEERR" ;       #### ADD
-
-   close $stdin  or croak "$! closing pumper's stdin in parent" ;
-   close $stdout or croak "$! closing pumper's stdout in parent" ;
-   # Don't close $debug_fd, we need it, as do other pumpers.
-
-   # Pause a moment to allow the child to get up and running and emit
-   # debug messages.  This does not always work.
-   #   select undef, undef, undef, 1 if _debugging_details ;
-
-   _debug "_spawn_pumper pid = ", $process->GetProcessID ;
-}
-
-
-my $next_port = 2048 ;
-my $loopback  = inet_aton "127.0.0.1" ;
-my $tcp_proto = getprotobyname('tcp');
-croak "$!: getprotobyname('tcp')" unless defined $tcp_proto ;
-
-sub _socket {
-   my ( $server ) = @_ ;
-   $server ||= gensym ;
-   my $client = gensym ;
-
-   my $listener = gensym ;
-   socket $listener, PF_INET, SOCK_STREAM, $tcp_proto
-      or croak "$!: socket()";
-   setsockopt $listener, SOL_SOCKET, SO_REUSEADDR, pack("l", 0)
-      or croak "$!: setsockopt()";
-
-   my $port ;
-   my @errors ;
-PORT_FINDER_LOOP:
-   {
-      $port = $next_port ;
-      $next_port = 2048 if ++$next_port > 65_535 ; 
-      unless ( bind $listener, sockaddr_in( $port, INADDR_ANY ) ) {
-	 push @errors, "$! on port $port" ;
-	 croak join "\n", @errors if @errors > 10 ;
-         goto PORT_FINDER_LOOP;
+      for ( @{$kid->{OPS}} ) {
+         if ( $_->{TYPE} eq ">" ) {
+            if ( ref $_->{DEST} eq "SCALAR"
+               || (
+                  ( @{$_->{FILTERS}} > 1
+		     || ref $_->{DEST} eq "CODE"
+		     || ref $_->{DEST} eq "ARRAY"  ## Filters?
+	          )
+                  && ( $ok_to_optimize_outputs && ! $veto_output_optimization ) 
+               )
+            ) {
+	       $_->{RECV_THROUGH_TEMP_FILE} = 1;
+	       next;
+            }
+	    _debug
+	       "Win32 optimizer: NOT optimizing (kid $kid->{NUM}) ",
+	       $_->{KFD},
+	       $_->{TYPE},
+	       defined $_->{DEST}
+		  ? ref $_->{DEST}      ? ref $_->{DEST}
+					  : $_->{SOURCE}
+		  : defined $_->{FILENAME}
+					  ? $_->{FILENAME}
+					  : "",
+		  @{$_->{FILTERS}} ? " with filters" : (),
+	       if _debugging_details;
+         }
       }
    }
 
-   _debug "win32 port = $port" if _debugging_details ;
-
-   listen $listener, my $queue_size = 1
-      or croak "$!: listen()" ;
-
-   {
-      socket $client, PF_INET, SOCK_STREAM, $tcp_proto
-         or croak "$!: socket()";
-
-      my $paddr = sockaddr_in($port, $loopback );
-
-      connect $client, $paddr
-         or croak "$!: connect()" ;
-    
-      croak "$!: accept" unless defined $paddr ;
-
-      ## The windows "default" is SO_DONTLINGER, which should make
-      ## sure all socket data goes through.  I have my doubts based
-      ## on experimentation, but nothing prompts me to set SO_LINGER
-      ## at this time...
-      setsockopt $client, IPPROTO_TCP, TCP_NODELAY, pack("l", 0)
-	 or croak "$!: setsockopt()";
-   }
-
-   {
-      _debug "accept()ing on port $port" ;
-      my $paddr = accept( $server, $listener ) ;
-      croak "$!: accept()" unless defined $paddr ;
-   }
-
-   _debug
-      "win32 _socket = ( ", fileno $server, ", ", fileno $client, " ) on port $port" ;
-   return ( $server, $client ) ;
 }
-
-
-sub win32_fake_pipe {
-   my ( $dir, $debug_fd, $parent_handle, $binmode ) = @_ ;
-
-   confess "Undefined \$dir" unless defined $dir ;
-
-   my $self = bless {
-      ## Two ends of the socket that connect from the pump thread to the main
-      ## thread.
-      PARENT_HANDLE        => undef,
-      PUMP_SOCKET_HANDLE   => undef,
-
-      ## Two ends of the pipe that connect from the pump thread to
-      ## the child process.
-      CHILD_HANDLE         => gensym,
-      PUMP_PIPE_HANDLE     => gensym,
-   }, "IPC::Run::Win32FakePipe" ;
-
-   @{$self}{qw( PARENT_HANDLE PUMP_SOCKET_HANDLE )} = _socket $parent_handle ;
-
-   binmode $self->{PARENT_HANDLE}, $binmode ? ":raw" : ":crlf" or die $!;
-   binmode $self->{PUMP_SOCKET_HANDLE} or die $!;
-
-_debug "PUMP_SOCKET_HANDLE = ", fileno $self->{PUMP_SOCKET_HANDLE} ;
-##my $buf ;
-##$buf = "write on child end of " . fileno( $self->{WRITE_HANDLE} ) . "\n\n\n\n\n" ;
-##POSIX::write(fileno $self->{WRITE_HANDLE}, $buf, length $buf) or warn "$! in syswrite" ;
-##$buf = "write on parent end of " . fileno( $self->{CHILD_HANDLE} ) . "\r\n" ;
-##POSIX::write(fileno $self->{CHILD_HANDLE},$buf, length $buf) or warn "$! in syswrite" ;
-##   $self->{CHILD_HANDLE}->autoflush( 1 ) ;
-##   $self->{WRITE_HANDLE}->autoflush( 1 ) ;
-
-   ## Now fork off a data pump and arrange to return the correct fds.
-   if ( $dir eq "<" ) {
-      pipe $self->{CHILD_HANDLE}, $self->{PUMP_PIPE_HANDLE}
-         or croak "$! opening child pipe" ;
-_debug "CHILD_HANDLE = ", fileno $self->{CHILD_HANDLE} ;
-_debug "PUMP_PIPE_HANDLE = ", fileno $self->{PUMP_PIPE_HANDLE} ;
-   }
-   else {
-      pipe $self->{PUMP_PIPE_HANDLE}, $self->{CHILD_HANDLE}
-         or croak "$! opening child pipe" ;
-_debug "CHILD_HANDLE = ", fileno $self->{CHILD_HANDLE} ;
-_debug "PUMP_PIPE_HANDLE = ", fileno $self->{PUMP_PIPE_HANDLE} ;
-   }
-
-   ## No child should ever see this.
-   _dont_inherit $self->{PARENT_HANDLE} ;
-
-   ## We clear the inherit flag so these file descriptors are not inherited.
-   ## It'll be dup()ed on to STDIN/STDOUT/STDERR before CreateProcess is
-   ## called and *that* fd will be inheritable.
-   _dont_inherit $self->{PUMP_SOCKET_HANDLE} ;
-   _dont_inherit $self->{PUMP_PIPE_HANDLE} ;
-   _dont_inherit $self->{CHILD_HANDLE} ;
-
-   ## Need to return $self so the HANDLEs don't get freed.
-   ## Return $self, $parent_fd, $child_fd
-   my ( $parent_fd, $child_fd ) = (
-      fileno $self->{PARENT_HANDLE},
-      fileno $self->{CHILD_HANDLE}
-   ) ;
-
-   ## Both PUMP_..._HANDLEs will be closed, no need to worry about
-   ## inheritance.
-   _debug "binmode on" if _debugging_details && $binmode ;
-   _spawn_pumper(
-      ( $dir eq "<" )
-	 ? ( $self->{PUMP_SOCKET_HANDLE}, $self->{PUMP_PIPE_HANDLE} )
-	 : ( $self->{PUMP_PIPE_HANDLE}, $self->{PUMP_SOCKET_HANDLE} ),
-      $debug_fd,
-      "pump$dir$parent_fd",
-   ) ;
-
-{
-my $foo ;
-confess "PARENT_HANDLE no longer open"
-   unless POSIX::read( $parent_fd, $foo, 0 ) ;
-}
-
-   _debug "win32_fake_pipe = ( $parent_fd, $child_fd )" ;
-   return ( $self, $parent_fd, $child_fd ) ;
-}
-
 
 =item win32_parse_cmd_line
 
@@ -599,7 +451,8 @@ sub win32_spawn {
       }
    } @$cmd ;
 
-   _debug "cmd line: ", $cmd_line ;
+   _debug "cmd line: ", $cmd_line
+      if _debugging;
 
    Win32::Process::Create( 
       $process,

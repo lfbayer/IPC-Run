@@ -106,6 +106,31 @@ my @tests = (
 	    FILTERS => 3 },
       ]
    ),
+
+   expand_test(
+      [ ['a'], '<', \$f, '>', \$f ],
+      [
+	 { TYPE => '<',   SOURCE => \$f, KFD => 0, },
+	 { TYPE => '>',   DEST   => \$f, KFD => 1, },
+      ]
+   ),
+
+   expand_test(
+      [ ['a'], '<pipe', \$f, '>pipe', \$f ],
+      [
+	 { TYPE => '<pipe',   SOURCE => \$f, KFD => 0, },
+	 { TYPE => '>pipe',   DEST   => \$f, KFD => 1, },
+      ]
+   ),
+
+   expand_test(
+      [ ['a'], '<pipe', \$f, '>', \$f ],
+      [
+	 { TYPE => '<pipe',   SOURCE => \$f, KFD => 0, },
+	 { TYPE => '>',       DEST   => \$f, KFD => 1, },
+      ]
+   ),
+
 ) ;
 
 plan tests => scalar @tests ;

@@ -15,11 +15,12 @@ use strict ;
 
 use Test ;
 
-use IPC::Run qw( :filters :filter_imp start run filter_tests ) ;
-use UNIVERSAL qw( isa ) ;
+use IPC::Run::Debug qw( _map_fds );
+use IPC::Run qw( :filters :filter_imp start filter_tests Win32_MODE ) ;
 
-sub Win32_MODE() ;
-*Win32_MODE = \&IPC::Run::Win32_MODE ;
+sub run { IPC::Run::run( ref $_[0] ? ( noinherit => 1 ) : (), @_ ) }
+
+use UNIVERSAL qw( isa ) ;
 
 ## Win32 does not support a lot of things that Unix does.  These
 ## skip_unless subs help that.
@@ -53,6 +54,22 @@ sub skip_unless_high_fds(&) {
    shift ;
 }
 
+
+sub _unlink {
+   my ( $f ) = @_;
+   my $tries;
+   while () {
+      return if unlink $f;
+      if ( $^O =~ /Win32/ && ++$tries <= 10 ) {
+         print STDOUT "# Waiting for Win32 to allow $f to be unlinked ($!)\n";
+	 select undef, undef, undef, 0.1;
+	 next;
+      }
+      die "$! unlinking $f at ", join( ", line ", (caller)[1,2] ), "\n";
+   }
+}
+
+
 my $text    = "Hello World\n" ;
 
 my @perl    = ( $^X ) ;
@@ -71,15 +88,14 @@ my $err_file = 'run.t.err' ;
 
 my $h ;
 
-sub map_fds() { &IPC::Run::_map_fds }
-
-my $fd_map = map_fds ;
+my $fd_map = _map_fds ;
 
 sub slurp($) {
    my ( $f ) = @_ ;
    open( S, "<$f" ) or return "$! $f" ;
    my $r = join( '', <S> ) ;
-   close S ;
+   close S or warn "$!: $f";
+   select 0.1 if $^O =~ /Win32/;
    return $r ;
 }
 
@@ -123,12 +139,21 @@ sub case_inverting_filter {
 }
 
 
+sub eok {
+   my ( $got, $exp ) = ( shift, shift );
+   $got =~ s/([\000-\037])/sprintf "\\0x%02x", ord $1/ge if defined $exp;
+   $exp =~ s/([\000-\037])/sprintf "\\0x%02x", ord $1/ge if defined $exp;
+   @_ = ( $got, $exp, @_ );
+   goto &ok;
+}
+
+
 my $r ;
 
 
 my @tests = (
 
-sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 
 ##
 ## Internal testing
@@ -140,7 +165,7 @@ filter_tests(
    \&alt_casing_filter
 ),
 
-sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 
 filter_tests(
    "case_inverting_filter",
@@ -149,7 +174,7 @@ filter_tests(
    \&case_inverting_filter
 ),
 
-sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 
 ##
 ## Calling the local system shell
@@ -157,13 +182,13 @@ sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
 sub { ok run qq{$^X -e exit} },
 sub { ok $?, 0 },
 
-sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 
 skip_unless_shell { ok ! run qq{$^X -e 'exit(42)'} },
 skip_unless_shell { ok $?                          },
 skip_unless_shell { ok $? >> 8, 42                 },
 
-sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 
 ##
 ## Simple commands, not executed via shell
@@ -171,13 +196,13 @@ sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
 sub { ok( run $^X, qw{-e exit}       ) },
 sub { ok( $?, 0 ) },
 
-sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 
 sub { ok( ! run $^X, qw{-e exit(42)} ) },
 sub { ok( $? ) },
 sub { ok $? >> 8, 42 },
 
-sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 
 ##
 ## A function
@@ -188,7 +213,7 @@ skip_unless_subs { ok !run sub{ exit 42 } },
 skip_unless_subs { ok $?                  },
 skip_unless_subs { ok $? >> 8, 42         },
 
-sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 
 ##
 ## A function, and an init function
@@ -204,46 +229,44 @@ skip_unless_subs {
 },
 skip_unless_subs { ok( $? ) },
 
-sub { ok( map_fds, $fd_map ) ; $fd_map = map_fds },
+sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 
 ##
 ## scalar ref I & O redirection using op tokens
 ##
 sub {
    $out = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run [ @emitter, "nostderr" ], '>', \$out ;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
-sub { ok( $out,        $text       ) },
+sub { ok( _map_fds, $fd_map ) },
+sub { eok( $out,        $text       ) },
 
 sub {
    $out = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run [ @emitter, "nostderr" ], '<', \undef, '>', \$out ;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
-sub { ok( $out,        $text       ) },
-
+sub { ok( _map_fds, $fd_map ) },
+sub { eok( $out,        $text       ) },
 sub {
    $in = $emitter_script ;
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run \@perl, '<', \$in, '>', \$out, '2>', \$err, ;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $in,     $emitter_script ) },
-sub { ok( $out,        $text       ) },
-sub { ok( $err,    uc( $text )     ) },
-
+sub { eok( $in,     $emitter_script ) },
+sub { eok( $out,        $text       ) },
+sub { eok( $err,    uc( $text )     ) },
 ##
 ## scalar ref I & O redirection, succinct mode.
 ##
@@ -251,16 +274,16 @@ sub {
    $in = $emitter_script ;
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run \@perl, \$in, \$out, \$err ;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $in,     $emitter_script ) },
-sub { ok( $out,        $text       ) },
-sub { ok( $err,    uc( $text )     ) },
+sub { eok( $in,     $emitter_script ) },
+sub { eok( $out,        $text       ) },
+sub { eok( $err,    uc( $text )     ) },
 
 ##
 ## Long output, to test for blocking read.
@@ -271,12 +294,12 @@ sub { ok( $err,    uc( $text )     ) },
 sub {
    $in = "-" x 20000 . "end\n" ;
    $out = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run [ $^X, qw{-e print"-"x20000;<STDIN>;} ], \$in, \$out ;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
 sub { ok( length $out, 20000 ) },
 sub { ok( $out !~ /[^-]/ ) },
@@ -288,7 +311,7 @@ skip_unless_subs {
    $in = $text ;
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run(
       sub { while (<>) { print ; print STDERR uc( $_ ) } },
          \$in, \$out, \$err 
@@ -296,11 +319,11 @@ skip_unless_subs {
    ok( $r ) ;
 },
 skip_unless_subs { ok ! $? },
-skip_unless_subs { ok( map_fds, $fd_map ) },
+skip_unless_subs { ok( _map_fds, $fd_map ) },
 
-skip_unless_subs { ok( $in,         $text       ) },
-skip_unless_subs { ok( $out,        $text       ) },
-skip_unless_subs { ok( $err,    uc( $text )     ) },
+skip_unless_subs { eok( $in,         $text       ) },
+skip_unless_subs { eok( $out,        $text       ) },
+skip_unless_subs { eok( $err,    uc( $text )     ) },
 
 ##
 ## here document as input
@@ -308,17 +331,17 @@ skip_unless_subs { ok( $err,    uc( $text )     ) },
 sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run \@perl, \<<TOHERE, \$out, \$err ;
 $emitter_script
 TOHERE
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out,    $text       ) },
-sub { ok( $err,    uc( $text ) ) },
+sub { eok( $out,    $text       ) },
+sub { eok( $err,    uc( $text ) ) },
 
 ##
 ## undef as input
@@ -326,15 +349,15 @@ sub { ok( $err,    uc( $text ) ) },
 sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run \@perl, \undef, \$out, \$err ;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out, '' ) },
-sub { ok( $err, '' ) },
+sub { eok( $out, '' ) },
+sub { eok( $err, '' ) },
 
 ##
 ## filehandle input redirection
@@ -342,7 +365,7 @@ sub { ok( $err, '' ) },
 sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    spit( $in_file, $emitter_script ) ;
    open( F, "<$in_file" ) or die "$! $in_file" ;
    $r = run \@perl, \*F, \$out, \$err ;
@@ -351,10 +374,10 @@ sub {
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out,    $text       ) },
-sub { ok( $err,    uc( $text ) ) },
+sub { eok( $out,    $text       ) },
+sub { eok( $err,    uc( $text ) ) },
 
 ##
 ## input redirection via caller writing directly to a pipe
@@ -362,7 +385,7 @@ sub { ok( $err,    uc( $text ) ) },
 sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $h = start \@perl, '<pipe', \*IN, '>', \$out, '2>', \$err ;
    ## Assume this won't block...
    print IN $emitter_script ;
@@ -371,10 +394,10 @@ sub {
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out,    $text       ) },
-sub { ok( $err,    uc( $text ) ) },
+sub { eok( $out,    $text       ) },
+sub { eok( $err,    uc( $text ) ) },
 
 ##
 ## filehandle input redirection, passed via *F{IO}
@@ -382,25 +405,25 @@ sub { ok( $err,    uc( $text ) ) },
 sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    spit( $in_file, $emitter_script ) ;
    open( F, "<$in_file" ) or die "$! $in_file" ;
    $r = run \@perl, *F{IO}, \$out, \$err ;
    close F ;
-   unlink $in_file or warn "$! $in_file" ;
+   _unlink $in_file;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out,    $text       ) },
-sub { ok( $err,    uc( $text ) ) },
+sub { eok( $out,    $text       ) },
+sub { eok( $err,    uc( $text ) ) },
 
 ##
 ## filehandle output redirection
 ##
 sub {
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    open( OUT, ">$out_file" ) or die "$! $out_file" ;
    open( ERR, ">$err_file" ) or die "$! $err_file" ;
    print OUT     "out: " ;
@@ -412,21 +435,21 @@ sub {
    close ERR ;
    $out = slurp( $out_file ) ;
    $err = slurp( $err_file ) ;
-   unlink $out_file or warn "$! $out_file" ;
-   unlink $err_file or warn "$! $err_file" ;
+   _unlink $out_file;
+   _unlink $err_file;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out,     "out: $text more out data"   ) },
-sub { ok( $err, uc( "err: $text more err data" ) ) },
+sub { eok( $out,     "out: $text more out data"   ) },
+sub { eok( $err, uc( "err: $text more err data" ) ) },
 
 ##
 ## filehandle output redirection via a pipe that is returned to the caller
 ##
 sub {
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    my $r = run \@emitter, \undef, '>pipe', \*OUT, '2>pipe', \*ERR ;
    $out = '' ;
    $err = '' ;
@@ -437,10 +460,10 @@ sub {
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out,     $text   ) },
-sub { ok( $err, uc( $text ) ) },
+sub { eok( $out,     $text   ) },
+sub { eok( $err, uc( $text ) ) },
 
 ##
 ## sub I & O redirection
@@ -449,7 +472,7 @@ sub {
    $in = $emitter_script ;
    $out = undef ;
    $err = undef ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run(
       \@perl,
       '<',  sub { my $f = $in ; $in = undef ; return $f },
@@ -459,10 +482,10 @@ sub {
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out,        $text       ) },
-sub { ok( $err,    uc( $text )     ) },
+sub { eok( $out,        $text       ) },
+sub { eok( $err,    uc( $text )     ) },
 
 ##
 ## input redirection from a file
@@ -470,7 +493,7 @@ sub { ok( $err,    uc( $text )     ) },
 sub {
    $out = undef ;
    $err = undef ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    spit( $in_file, $emitter_script ) ;
    $r = run(
       \@perl,
@@ -478,14 +501,14 @@ sub {
       '>',  sub { $out .= shift },
       '2>', sub { $err .= shift },
    ) ;
-   unlink( $in_file ) or warn "$! unlinking '$in_file'" ;
+   _unlink $in_file;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out, $text ) },
-sub { ok( $err, uc( $text ) ) },
+sub { eok( $out, $text ) },
+sub { eok( $err, uc( $text ) ) },
 
 ##
 ## reading input from a non standard fd
@@ -493,7 +516,7 @@ sub { ok( $err, uc( $text ) ) },
 skip_unless_high_fds {
    $out = undef ;
    $err = undef ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run(
       [ @perl, '-le', 'open( STDIN, "<&3" ) or die $! ; print <STDIN>' ],
       "3<", \"Hello World",
@@ -503,10 +526,10 @@ skip_unless_high_fds {
    ok( $r ) ;
 },
 skip_unless_high_fds { ok( ! $? ) },
-skip_unless_high_fds { ok( map_fds, $fd_map ) },
+skip_unless_high_fds { ok( _map_fds, $fd_map ) },
 
-skip_unless_high_fds { ok( $out, $text ) },
-skip_unless_high_fds { ok( $err, '' ) },
+skip_unless_high_fds { eok( $out, $text ) },
+skip_unless_high_fds { eok( $err, '' ) },
 
 ##
 ## duping input descriptors and an input descriptor > 0
@@ -515,7 +538,7 @@ skip_unless_high_fds {
    $in  = $emitter_script ;
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run(
       \@perl, 
 	 '>',  \$out, 
@@ -526,10 +549,10 @@ skip_unless_high_fds {
    ok( $r ) ;
 },
 skip_unless_high_fds { ok( ! $? ) },
-skip_unless_high_fds { ok( map_fds, $fd_map ) },
-skip_unless_high_fds { ok( $in,     $emitter_script ) },
-skip_unless_high_fds { ok( $out,     $text   ) },
-skip_unless_high_fds { ok( $err, uc( $text ) ) },
+skip_unless_high_fds { ok( _map_fds, $fd_map ) },
+skip_unless_high_fds { eok( $in,     $emitter_script ) },
+skip_unless_high_fds { eok( $out,     $text   ) },
+skip_unless_high_fds { eok( $err, uc( $text ) ) },
 
 ##
 ## closing input descriptors
@@ -537,7 +560,7 @@ skip_unless_high_fds { ok( $err, uc( $text ) ) },
 sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    spit( $in_file, $emitter_script ) ;
    $r = run(
       [ @perl, '-e', '$l = readline *STDIN or die $! ; print $l' ], 
@@ -546,13 +569,13 @@ sub {
 	 '<',  $in_file,
 	 '0<&-',
    ) ;
-   unlink $in_file or warn "$! unlinking '$in_file'" ;
+   _unlink $in_file;
    ok( ! $r ) ;
 },
 sub { ok( $? ) },
-sub { ok( map_fds, $fd_map ) },
-sub { ok( $out, ''  ) },
-sub { ok( length $err > 0 ? "Bad file descriptor error" : $err, "Bad file descriptor error" ) },
+sub { ok( _map_fds, $fd_map ) },
+sub { eok( $out, ''  ) },
+sub { ok( $err =~ /file descriptor/i ? "Bad file descriptor error" : $err, "Bad file descriptor error" ) },
 
 ##
 ## input redirection from a non-existent file
@@ -560,12 +583,9 @@ sub { ok( length $err > 0 ? "Bad file descriptor error" : $err, "Bad file descri
 sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    my $bad_file = "$in_file.nonexistant" ;
-   if ( -e $bad_file ) {
-      unlink $bad_file or die "$! unlinking '$bad_file'" ;
-      die "$bad_file still exists" if -e $bad_file ;
-   }
+   _unlink $bad_file if -e $bad_file;
    eval {
       $r = run \@perl, ">$out_file", "<$bad_file" ;
    } ;
@@ -576,19 +596,15 @@ sub {
       ok $@, "qr/\Q$bad_file\E/" ;
    }
 },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
 ##
 ## output redirection to a file w/ creation or truncation
 ##
 sub {
-   $fd_map = map_fds ;
-   if ( -x $out_file ) {
-      unlink( $out_file ) or die "$! unlinking '$out_file'" ;
-   }
-   if ( -x $err_file ) {
-      unlink( $err_file ) or die "$! unlinking '$err_file'" ;
-   }
+   $fd_map = _map_fds ;
+   _unlink $out_file if -x $out_file;
+   _unlink $err_file if -x $err_file;
    $r = run(
       \@emitter,
       ">$out_file",
@@ -599,16 +615,16 @@ sub {
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out, $text ) },
-sub { ok( $err, uc( $text ) ) },
+sub { eok( $out, $text ) },
+sub { eok( $err, uc( $text ) ) },
 
 ##
 ## output file redirection, w/ truncation
 ##
 sub {
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    spit( $out_file, 'out: ' ) ;
    spit( $err_file, 'ERR: ' ) ;
    $r = run(
@@ -616,17 +632,15 @@ sub {
       ">$out_file",
       "2>$err_file",
    ) ;
-   $out = slurp( $out_file ) ;
-   unlink $out_file or warn "$! unlinking '$out_file'" ;
-   $err = slurp( $err_file ) ;
-   unlink $err_file or warn "$! unlinking '$err_file'" ;
+   $out = slurp( $out_file ) ; _unlink $out_file;
+   $err = slurp( $err_file ) ; _unlink $err_file;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out, $text ) },
-sub { ok( $err, uc( $text ) ) },
+sub { eok( $out, $text ) },
+sub { eok( $err, uc( $text ) ) },
 
 ##
 ## output file redirection w/ append
@@ -634,52 +648,50 @@ sub { ok( $err, uc( $text ) ) },
 sub {
    spit( $out_file, 'out: ' ) ;
    spit( $err_file, 'ERR: ' ) ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run(
       \@emitter,
       ">>$out_file",
       "2>>$err_file",
    ) ;
    $out = slurp( $out_file ) ;
-   unlink $out_file or warn "$! unlinking '$out_file'" ;
+   _unlink $out_file;
    $err = slurp( $err_file ) ;
-   unlink $err_file or warn "$! unlinking '$err_file'" ;
+   _unlink $err_file;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out, "out: $text" ) },
-sub { ok( $err, uc( "err: $text" ) ) },
+sub { eok( $out, "out: $text" ) },
+sub { eok( $err, uc( "err: $text" ) ) },
 ##
 ## dup()ing output descriptors
 ##
 sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run \@emitter, '>', \$out, '2>', \$err, '2>&1' ;
    ok( $r ) ;
 },
 sub  { ok( ! $? ) },
-sub  { ok( map_fds, $fd_map ) },
+sub  { ok( _map_fds, $fd_map ) },
 sub  { $out =~ /(?:$text){2}/i ? ok 1 : ok $out, "qr/($text){2}/i" },
-sub  { ok( $err, '' ) },
+sub  { eok( $err, '' ) },
 
 ##
 ## stderr & stdout redirection to the same file via >&word
 ##
 sub {
-   $fd_map = map_fds ;
-   if ( -x $out_file ) {
-      unlink( $out_file ) or die "$! unlinking '$out_file'" ;
-   }
+   $fd_map = _map_fds ;
+   _unlink $out_file if -x $out_file;
    $r = run \@emitter, ">&$out_file" ;
    $out = slurp( $out_file ) ;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
 sub { ok( $out =~ qr/(?:$text){2}/i ) },
 
@@ -687,23 +699,23 @@ sub { ok( $out =~ qr/(?:$text){2}/i ) },
 ## Non-zero exit value, command with args, no redirects.
 ##
 sub {
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run [ @perl, '-e', 'exit(42)' ] ;
    ok( !$r ) ;
 },
 sub { ok( $?, 42 << 8 ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
 ##
 ## Zero exit value, command with args, no redirects.
 ##
 sub {
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run [ @perl, qw{ -e exit }] ;
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
 ##
 ## dup()ing output descriptors that collide.
@@ -714,24 +726,23 @@ sub { ok( map_fds, $fd_map ) },
 skip_unless_high_fds {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   if ( -x $out_file ) {
-      unlink( $out_file ) or die "$! unlinking '$out_file'" ;
-   }
-   $fd_map = map_fds ;
+   _unlink $out_file if -x $out_file;
+   $fd_map = _map_fds ;
    $r = run(
       \@emitter,
+      "<", \"",
       "3>&1", "4>&1", "5>&1",
       ">$out_file",
       '2>', \$err,
    ) ;
    $out = slurp( $out_file ) ;
-   unlink $out_file ;
+   _unlink $out_file;
    ok( $r ) ;
 },
 skip_unless_high_fds { ok( ! $? ) },
-skip_unless_high_fds { ok( map_fds, $fd_map ) },
-skip_unless_high_fds { ok( $out,     $text   ) },
-skip_unless_high_fds { ok( $err, uc( $text ) ) },
+skip_unless_high_fds { ok( _map_fds, $fd_map ) },
+skip_unless_high_fds { eok( $out,     $text   ) },
+skip_unless_high_fds { eok( $err, uc( $text ) ) },
 
 ##
 ## Pipelining
@@ -739,7 +750,7 @@ skip_unless_high_fds { ok( $err, uc( $text ) ) },
 sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run(
       [ @perl, '-lane', 'print STDERR "1:$_" ; print uc($F[0])," ",$F[1]'],
          \"Hello World",
@@ -750,9 +761,9 @@ sub {
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
-sub { ok( $out, "HELLO world\n" ) },
-sub { ok( $err, "1:Hello World\n2:HELLO World\n" ) },
+sub { ok( _map_fds, $fd_map ) },
+sub { eok( $out, "HELLO world\n" ) },
+sub { eok( $err, "1:Hello World\n2:HELLO World\n" ) },
 
 ##
 ## Parallel (unpiplined) processes
@@ -760,7 +771,7 @@ sub { ok( $err, "1:Hello World\n2:HELLO World\n" ) },
 sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run(
       [ @perl, '-lane', 'print STDERR "1:$_" ; print uc($F[0])," ",$F[1]' ],
          \"Hello World",
@@ -772,7 +783,7 @@ sub {
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 sub { ok( $out =~ qr/^(?:HELLO World\n|Hello world\n){2}$/s ) },
 sub { ok( $err =~ qr/^(?:[12]:Hello World.*){2}$/s ) },
 
@@ -798,11 +809,10 @@ sub {
       }
    } qw( | & < > >& 1>&2 >file <file 2<&1 <&- 3<&- )
 ),
-
 sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    eval {
       $r = run( \@emitter, '>', \$out, '2>', \$err,
 	 _simulate_fork_failure => 1
@@ -811,30 +821,30 @@ sub {
    ok( $@ ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out, '' ) },
-sub { ok( $err, '' ) },
+sub { eok( $out, '' ) },
+sub { eok( $err, '' ) },
 
 sub {
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    eval {
       $r = run \@perl, '<file', _simulate_open_failure => 1 ;
    } ;
    ok( $@ ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
 sub {
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    eval {
       $r = run \@perl, '>file', _simulate_open_failure => 1 ;
    } ;
    ok( $@ ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
 ##
 ## harness, pump, run
@@ -844,7 +854,7 @@ sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
    $? = 99 ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $h = start(
       [ @perl, '-pe', 'BEGIN { $| = 1 } print STDERR uc($_)' ],
       \$in, \$out, \$err,
@@ -853,9 +863,9 @@ sub {
 },
 sub { ok( $?, 99 ) },
 
-sub { ok( $in,  'SHOULD BE UNCHANGED' ) },
-sub { ok( $out, '' ) },
-sub { ok( $err, '' ) },
+sub { eok( $in,  'SHOULD BE UNCHANGED' ) },
+sub { eok( $out, '' ) },
+sub { eok( $err, '' ) },
 sub { ok( $h->pumpable ) },
 
 sub {
@@ -864,9 +874,9 @@ sub {
    pump_nb $h for ( 1..100 ) ;
    ok( 1 ) ;
 },
-sub { ok( $in, '' ) },
-sub { ok( $out, '' ) },
-sub { ok( $err, '' ) },
+sub { eok( $in, '' ) },
+sub { eok( $out, '' ) },
+sub { eok( $err, '' ) },
 sub { ok( $h->pumpable ) },
 
 sub {
@@ -876,15 +886,15 @@ sub {
    ok( 1 ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( $in, '' ) },
-sub { ok( $out, $text ) },
+sub { eok( $in, '' ) },
+sub { eok( $out, $text ) },
 sub { ok( $h->pumpable ) },
 
 sub { ok( $h->finish ) },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
-sub { ok( $out,     $text   ) },
-sub { ok( $err, uc( $text ) ) },
+sub { ok( _map_fds, $fd_map ) },
+sub { eok( $out,     $text   ) },
+sub { eok( $err, uc( $text ) ) },
 sub { ok( ! $h->pumpable ) },
 
 ##
@@ -894,7 +904,7 @@ sub {
    $in  = 'SHOULD BE UNCHANGED' ;
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $h = start(
       [ @perl, '-pe', 'binmode STDOUT ; binmode STDERR ; BEGIN { $| = 1 } print STDERR uc($_)' ],
 	 \$in, \$out, \$err,
@@ -902,9 +912,9 @@ sub {
    ok( isa( $h, 'IPC::Run' ) ) ;
 },
 
-sub { ok( $in, 'SHOULD BE UNCHANGED' ) },
-sub { ok( $out, '' ) },
-sub { ok( $err, '' ) },
+sub { eok( $in, 'SHOULD BE UNCHANGED' ) },
+sub { eok( $out, '' ) },
+sub { eok( $err, '' ) },
 sub { ok( $h->pumpable ) },
 
 sub { 
@@ -912,10 +922,10 @@ sub {
    ok( $h->finish )
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
-sub { ok( $in,      ''      ) },
-sub { ok( $out,     $text   ) },
-sub { ok( $err, uc( $text ) ) },
+sub { ok( _map_fds, $fd_map ) },
+sub { eok( $in,      ''      ) },
+sub { eok( $out,     $text   ) },
+sub { eok( $err, uc( $text ) ) },
 sub { ok( ! $h->pumpable ) },
 
 sub { 
@@ -925,10 +935,10 @@ sub {
    ok( $h->run )
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
-sub { ok( $in,      $text   ) },
-sub { ok( $out,     $text   ) },
-sub { ok( $err, uc( $text ) ) },
+sub { ok( _map_fds, $fd_map ) },
+sub { eok( $in,      $text   ) },
+sub { eok( $out,     $text   ) },
+sub { eok( $err, uc( $text ) ) },
 sub { ok( ! $h->pumpable ) },
 
 sub { 
@@ -938,10 +948,10 @@ sub {
    ok( $h->run )
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
-sub { ok( $in,      $text   ) },
-sub { ok( $out,     $text   ) },
-sub { ok( $err, uc( $text ) ) },
+sub { ok( _map_fds, $fd_map ) },
+sub { eok( $in,      $text   ) },
+sub { eok( $out,     $text   ) },
+sub { eok( $err, uc( $text ) ) },
 sub { ok( ! $h->pumpable ) },
 
 ##
@@ -950,7 +960,7 @@ sub { ok( ! $h->pumpable ) },
 sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $r = run(
       \@emitter,
       '>',
@@ -962,10 +972,10 @@ sub {
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $out, "HeLlO WoRlD\n" ) },
-sub { ok( $err, uc( $text ) ) },
+sub { eok( $out, "HeLlO WoRlD\n" ) },
+sub { eok( $err, uc( $text ) ) },
 
 ##
 ## Input filters
@@ -973,7 +983,7 @@ sub { ok( $err, uc( $text ) ) },
 sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $in = $text ;
    $r = run(
       [ @perl, '-pe', 'binmode STDOUT ; binmode STDERR ; print STDERR uc $_' ],
@@ -987,11 +997,11 @@ sub {
    ok( $r ) ;
 },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 
-sub { ok( $in,      $text   ) },
-sub { ok( $out,    "HeLlO WoRlD\n" ) },
-sub { ok( $err,    uc( $text ) ) },
+sub { eok( $in,      $text   ) },
+sub { eok( $out,    "HeLlO WoRlD\n" ) },
+sub { eok( $err,    uc( $text ) ) },
 ) ;
 
 plan tests => scalar @tests ;

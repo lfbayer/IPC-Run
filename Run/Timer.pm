@@ -184,6 +184,7 @@ use vars qw( @EXPORT_OK %EXPORT_TAGS @ISA ) ;
 @ISA = qw( Exporter ) ;
 
 require IPC::Run ;
+use IPC::Run::Debug ;
 
 use fields (
    'INTERVAL',       # An array of the intervals
@@ -195,17 +196,6 @@ use fields (
    'END_TIME',       # Time the timer will/did expire
    'DEBUG',          # Whether or not to send debug messages.
 ) ;
-
-##
-## some overly-friendly imports
-##
-sub _debug ;
-sub _debugging() ;
-sub _debugging_details() ;
-
-*_debug             = \&IPC::Run::_debug ;
-*_debugging         = \&IPC::Run::_debugging ;
-*_debugging_details = \&IPC::Run::_debugging_details ;
 
 ##
 ## Some helpers

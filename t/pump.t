@@ -10,6 +10,7 @@ use strict ;
 
 use Test ;
 
+use IPC::Run::Debug qw( _map_fds );
 use IPC::Run qw( start pump finish timeout ) ;
 use UNIVERSAL qw( isa ) ;
 
@@ -25,8 +26,6 @@ my $h ;
 
 my $fd_map ;
 
-sub map_fds() { &IPC::Run::_map_fds }
-
 my @tests = (
 ##
 ## harness, pump, run
@@ -35,7 +34,7 @@ sub {
    $in  = 'SHOULD BE UNCHANGED' ;
    $out = 'REPLACE ME' ;
    $? = 99 ;
-   $fd_map = map_fds ;
+   $fd_map = _map_fds ;
    $h = start( \@echoer, \$in, \$out, timeout 5 ) ;
    ok( isa( $h, 'IPC::Run' ) ) ;
 },
@@ -100,7 +99,7 @@ sub {
 
 sub { ok( $h->finish ) },
 sub { ok( ! $? ) },
-sub { ok( map_fds, $fd_map ) },
+sub { ok( _map_fds, $fd_map ) },
 sub { ok( $out, "hello\nworld\n" ) },
 sub { ok( ! $h->pumpable ) },
 ) ;
