@@ -1,5 +1,12 @@
 Revision history for Perl extension IPC::Bashem.
 
+0.3  Sat Jun  3 08:33:17 EDT 2000
+   - Changed spelling of '<|<' and '>|>' to '<pipe' and '>pipe'.  This
+     is to make it less confusing (I hope), since '>|' is a valid construct
+     in some shells with totally unrelated semantics, and I plan on adding
+     it to IPC::Run if a noclobber option ever makes it in.
+   - Added '<pty<' and '>pty>' operators.
+
 0.21 Fri Jun  2 12:49:08 EDT 2000
    - Added some advice for dealing with obstinate children
    - Converted many methods to plain subs for simplicity & performance

@@ -3,12 +3,15 @@ Changes
 MANIFEST
 MANIFEST.SKIP
 Run.pm
+Run/Pty.pm
 eg/factorial
 eg/factorial_pipe
 eg/factorial_scalar
 eg/runsh
+eg/runsu
 t/filter.t
 t/harness.t
+t/pty.t
 t/pump.t
 t/run.t
 t/timeout.t

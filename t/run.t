@@ -11,7 +11,6 @@ use strict ;
 use Test ;
 
 use IPC::Run qw( :filters :filter_imp start run filter_tests ) ;
-use POSIX qw( fstat ) ;
 use UNIVERSAL qw( isa ) ;
 
 my $text    = "Hello World\n" ;
@@ -264,7 +263,7 @@ sub {
    $out = 'REPLACE ME' ;
    $err = 'REPLACE ME' ;
    $fd_map = map_fds ;
-   $h = start \@perl, '<|<', \*IN, '>', \$out, '2>', \$err ;
+   $h = start \@perl, '<pipe', \*IN, '>', \$out, '2>', \$err ;
    ## Assume this won't block...
    print IN $emitter_script ;
    close IN or warn $! ;
@@ -328,7 +327,7 @@ sub { ok( $err, uc( "err: $text more err data" ) ) },
 ##
 sub {
    $fd_map = map_fds ;
-   my $r = run \@emitter, \undef, '>|>', \*OUT, '2>|>', \*ERR ;
+   my $r = run \@emitter, \undef, '>pipe', \*OUT, '2>pipe', \*ERR ;
    $out = '' ;
    $err = '' ;
    read OUT, $out, 10000 or warn $!;

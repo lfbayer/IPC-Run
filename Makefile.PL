@@ -3,5 +3,6 @@ use ExtUtils::MakeMaker;
 # the contents of the Makefile that is written.
 WriteMakefile(
     'NAME'         => 'IPC::Run',
+#    'PMLIBDIRS'    => [ 'Run' ],
     'VERSION_FROM' => 'Run.pm', # finds $VERSION
 );

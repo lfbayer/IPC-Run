@@ -12,7 +12,7 @@ die "\$i must be > 0, not '$i'" unless $i =~ /^\d+$/ && $i > 0 ;
 
 my $out ;
 
-my $h = start ['bc'], '<|<', \*IN, '>', \$out ;
+my $h = start ['bc'], '<pipe', \*IN, '>', \$out ;
 my $tmp = select IN ; $|= 1 ; select $tmp ;
 
 print IN "a = i = $i ; i\n" ;

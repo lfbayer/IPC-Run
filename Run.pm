@@ -9,7 +9,7 @@ package IPC::Run ;
 
 =head1 NAME
 
-IPC::Run - run processes with piping and redirection
+IPC::Run - Run subprocesses w/ piping, redirection, and psuedo-ttys
 
 =head1 SYNOPSIS
 
@@ -17,14 +17,22 @@ IPC::Run - run processes with piping and redirection
 
    my @cat = qw( cat in.txt - ) ;
 
-   # Batch process fed from / outputting to scalars
-      $in = "input" ;
-      run \@cat, \$in, \$out, \$err or die "cat returned $?";
-      run \@cat, \"input", \$out, \$err or die "cat returned $?";
-      run \@cat, \<<TOHERE, \$out, \$err or die "cat returned $?";
-      input
-      TOHERE
-      run \@cat, \undef, \$out, \$err or die "cat returned $?";
+   run \@cat, \undef,    \$out, \$err or die "cat returned $?";
+
+   $in = "input" ;
+   run \@cat, \$in,      \$out, \$err or die "cat returned $?";
+
+   run \@cat, \"input",  \$out, \$err or die "cat returned $?";
+
+   run \@cat, \<<TOHERE, \$out, \$err or die "cat returned $?";
+   input
+   TOHERE
+
+   run \@cat, \&get_some_in, \&catch_some_out, \&catch_some_err or ... ;
+
+   run \@cat, '<', $in_filename, '>', $out_name, '2>', $err_name or ... ;
+
+   run \@cat, '<pty<', \$in, '>pty>', \$out ;
 
    # Incrementally read from / write to scalars.  Note that $in_q
    # is a queue that is drained as it is used, which is not the
@@ -50,12 +58,6 @@ IPC::Run - run processes with piping and redirection
       finish $h or die "cat returned $?" ;
       warn $err_q ; 
       print $out_q ;
-
-   # Batch process fed from / outputing to subroutines
-      run \@cat, \&get_some_in, \&catch_some_out, \&catch_some_err ;
-
-   # ... from / to named files (names are not munged in any way)
-      run \@cat, '<', $in_name, '>', $out_name, '2>', $err_name ;
 
    # Piping between children
       run \@cat, '|', [qw(gzip)] ;
@@ -87,9 +89,9 @@ IPC::Run - run processes with piping and redirection
    # Create pipes for you to read / write (like IPC::Open2 & 3).
       $h = start
          \@cat,
-	    '<|<', \*IN,
-	    '>|>', \*OUT,
-	    '2>|>', \*ERR 
+	    '<pipe', \*IN,
+	    '>pipe', \*OUT,
+	    '2>pipe', \*ERR 
 	 or die "cat returned $?" ;
       print IN "some input\n" ;
       close IN ;
@@ -128,7 +130,7 @@ pipes, or files.
 Various redirection operators reminiscent of those
 seen on common Unix and MSDOS command lines are provided.
 
-=head2 run() vs. start()/pump()/finish()
+=head2 run() vs. start();pump();finish()
 
 There are two modes you can run child processes in: batch and 
 incremental.
@@ -211,19 +213,18 @@ Perl subs:
    run \&sub1, '&', \&sub2 ;
 
 '|' pipes the stdout of \@cmd1 the stdin of \@cmd2, just like a
-shell pipe.  '&' does not.  Child processes to the right of each '&'
+shell pipe.  '&' does not.  Child processes to the right of a '&'
 will have their stdin closed unless it's redirected-to.
 
-Each command can have redirection specifiers after it and before any
-'|' or '&'.  These may be succinct:
+Each command may be immediately followed by redirection operators:
 
-   run \@cmd, \undef, \$out ;
-   run \@cmd, \$in, \$out ;
+   run \@cmd,  \undef,            \$out ;
+   run \@cmd,  \$in,              \$out ;
    run \@cmd1, \$in, '|', \@cmd2, \$out ;
 
 or verbose, using operators found on many shell command lines:
 
-   run \@cmd, '<', \undef, '>', \$out ;
+   run \@cmd, '<', \undef, '>',  \$out ;
    run \@cmd, '<', \undef, '>&', \$out ;
    run(
       \@cmd1,
@@ -334,9 +335,7 @@ detect a tty there.  Some ftp commands do this, for instance.
 
 If this happens to you, look for a way to force interactive behavior,
 like a command line switch or command.  If you can't, you will
-need to use a psuedo tty, and this is not yet provided by IPC::Run.
-
-Expect.pm and IO::Pty might be of assistance.
+need to use a psuedo terminal ('<pty<' and '>pty>').
 
 =item *
 
@@ -362,7 +361,14 @@ You should also look for your prompt to be the only thing on a line:
 
 You can also take the approach that IPC::ChildSafe takes and emit a
 command with known output after each 'real' command you issue, then
-look for this known output.
+look for this known output.  See new_appender() and new_chunker() for
+filters that can help with this task.
+
+If it's not convenient or possibly to alter a prompt or use a known
+command/response pair, you might need to autodetect the prompt in case
+the local version of the child program is different then the one
+you tested with, or if the user has control over the look & feel of
+the prompt.
 
 =item *
 
@@ -372,7 +378,7 @@ Some programs, for security reasons, will only accept certain types
 of input from a tty.  su, notable, will not prompt for a password unless
 it's connected to a tty.
 
-If this is your situation, use a psuedo terminal.
+If this is your situation, use a psuedo terminal ('<pty<' and '>pty>').
 
 =item *
 
@@ -382,7 +388,8 @@ Some programs don't prompt unless stdin or stdout is a tty.  See if you can
 turn prompting back on.  If not, see if you can come up with a command that
 you can issue after every real command and look for it's output, as
 IPC::ChildSafe does.   There are two filters included with IPC::Run that
-can help with doing this.
+can help with doing this: appender and chunker (see new_appender() and
+new_chunker()).
 
 =item *
 
@@ -391,11 +398,69 @@ Different output format when not connected to a tty.
 Some commands alter their formats to ease machine parsability when they
 aren't connected to a pipe.  This is actually good, but can be suprising.
 
+=back
+
+=head1 PSUEDO TERMINALS
+
+On systems providing psuedo terminals under /dev, IPC::Run can use IO::Pty
+(available on CPAN) to provide a terminal environment to subprocesses.
+This is necessary when the subprocess really wants to think it's connected
+to a real terminal.
+
+=head2 CAVEATS
+
+Psuedo-terminals are not pipes, though they are similar.  Here are some
+differences to watch out for.
+
+=over
+
+=item Echoing
+
+Sending to stdin will cause an echo on stdout, which occurs before each line
+is passed to the child program.  There is currently no way to disable this.
+
+=item Shutdown
+
+IPC::Run cannot close a pty until all output has been collected.  This means
+that it is not possible to send an EOF to stdin by half-closing the pty, as
+we can when using a pipe to stdin.
+
+This means that you need to send the
+child process an exit command or signal, or run() / finish() will time out.
+Be careful not to expect a prompt after sending the exit command.
+
+=item Command line editing
+
+Some subprocesses, notable shells that depend on the user's prompt settings,
+will reissue the prompt plus the command line input so far once for each
+character.
+
+=item '>pty>' means '&>pty>', not '1>pty>'
+
+The psuedo terminal redirects both stdin and stdout unless you specify
+a file desciptor.  If you want to grab stderr separately, do this:
+
+   start \@cmd, '<pty<', \$in, '>pty>', \$out, '2>', \$err ;
+
+=item stdin, stdout, and stderr not inherited
+
+Child processes harnessed to a psuedo terminal have their stdin, stdout,
+and stderr completely closed before any redirection operators take
+effect.  This casts of the bonds of the controlling terminal.  This is
+not done when using pipes.
+
+Right now, this affects all children in a harness that has a pty in
+use, even if that pty would not affect a particular child.  That's a bug
+and will be fixed.  Until it is, it's best not to mix-and-match
+children.
+
+=back
+
 =head2 Redirection Operators
 
 =over
 
-=item Redirecting input: [n]<, [n]<|<
+=item Redirecting input: [n]<, [n]<pipe
 
 You can input the child reads on file descriptor number n to come from a
 scalar variable, subroutine, file handle, or a named file.  If stdin
@@ -448,21 +513,29 @@ used as a queue.  This allows you to use &harness and pump() to
 feed incremental bits of input to a coprocess.  See L</Coprocesses>
 below for more information.
 
-The <|< token is different in concept than the plain <, although
-it's syntax is similar:
+The <pipe operator opens the write half of a pipe on the filehandle
+glob reference it takes as an argument:
 
-   $h = start \@cat, '<|<', \*IN ;
+   $h = start \@cat, '<pipe', \*IN ;
    print IN "hello world\n" ;
    pump $h ;
    close IN ;
    finish $h ;
 
-causes a pipe to be created, with one end attached to cat's stdin
-and the other left open on IN, so that the script can manually
-write(), select(), etc. on filehandle IN.  This is like
-the behavior of IPC::Open2 and IPC::Open3.
+Unlike the other '<' operators, IPC::Run does nothing further with
+it: you are responsible for it.  The previous example is functionally
+equivalent to:
 
-=item Redirecting output: [n]>, [n]>>, [n]>&[m], [n]>|>
+   pipe( \*R, \*IN ) or die $! ;
+   $h = start \@cat, '<', \*IN ;
+   print IN "hello world\n" ;
+   pump $h ;
+   close IN ;
+   finish $h ;
+
+This is like the behavior of IPC::Open2 and IPC::Open3.
+
+=item Redirecting output: [n]>, [n]>>, [n]>&[m], [n]>pipe
 
 You can redirect any output the child emits
 to a scalar variable, subroutine, file handle, or file name.  You
@@ -508,10 +581,10 @@ does the same basic thing as:
 
 The subroutine will be called each time some data is read from the child.
 
-The >|> token is different in concept than the other '>' tokens, although
+The >pipe token is different in concept than the other '>' tokens, although
 it's syntax is similar:
 
-   $h = start \@cat, $in, '>|>', \*OUT, '2>|>', \*ERR ;
+   $h = start \@cat, $in, '>pipe', \*OUT, '2>pipe', \*ERR ;
    $in = "hello world\n" ;
    finish $h ;
    print <OUT> ;
@@ -550,7 +623,7 @@ Doing
 
 is dangerous: the parent will get a SIGPIPE if $in is not empty.
 
-=item Redirecting both stdout and stderr: &>, >&, &>|>, >|>&
+=item Redirecting both stdout and stderr: &>, >&, &>pipe, >pipe&
 
 The following pairs of commands are equivalent:
 
@@ -562,7 +635,7 @@ etc.
 File descriptor numbers are not permitted to the left or the right of
 these tokens, and the '&' may occur on either end of the token.
 
-The '&>|>' and '>|>&' variants behave like the '>|>' token, except
+The '&>pipe' and '>pipe&' variants behave like the '>pipe' token, except
 that both stdout and stderr write to the created pipe.
 
 =item Redirection Filters
@@ -657,7 +730,7 @@ use Fcntl ;
 use POSIX () ;
 use Symbol ;
 
-$VERSION = '0.21' ;
+$VERSION = '0.3' ;
 
 @ISA = qw( Exporter ) ;
 
@@ -928,6 +1001,16 @@ sub _pipe {
 }
 
 
+sub _pty {
+   require IO::Pty ;
+   my $pty = IO::Pty->new() ;
+   $pty->autoflush() ;
+   croak "$!: pty ()" unless $pty ;
+   _debug "pty() = ", $pty->fileno if $debug > 1 ;
+   return $pty ;
+}
+
+
 sub _read {
    confess 'undef' unless defined $_[0] ;
    my $s  = '' ;
@@ -1026,6 +1109,7 @@ sub harness {
          %$options,
 	 KIDS       => \@kids,
 	 PIPES      => [],
+	 PTYS       => {},
 	 STATE      => _zippo,
       },
       __PACKAGE__ ;
@@ -1096,20 +1180,27 @@ sub harness {
 	    $ops_required = $first_parse ;
 	 }
 
-	 elsif ( /^(\d*)(<(?:\|<)?)(.*)$/ ) {
+	 elsif (
+	       /^(\d*) (<pipe)()            ()  ()  $/x
+	    || /^(\d*) (<pty) ((?:\s+\S+)?) (<) ()  $/x
+	    || /^(\d*) (<)    ()            ()  (.*)$/x
+	 ) {
 	    croak "No command before '$_'" unless $cur_kid ;
 
 	    $ops_required = $first_parse ;
 
 	    my $pipe = {
-	       TYPE    => $2,
+	       TYPE    => $2 . $4,
 	       KFD     => length $1 ? $1 : 0,
+	       PTY_ID  => $2 eq '<pty'
+	          ? length $3 ? $3 : '0'
+		  : undef,
 	    } ;
 
 	    push @{$cur_kid->{OPS}}, $pipe ;
 
-	    if ( length $3 ) {
-	       $pipe->{SOURCE} = $3 ;
+	    if ( length $5 ) {
+	       $pipe->{SOURCE} = $5 ;
 	    }
 	    else {
 	       my @filters ;
@@ -1130,11 +1221,21 @@ sub harness {
 		  ' user filters.'
 	       ) if @filters ;
 
+	       if ( $pipe->{TYPE} eq '<pty<' ) {
+		  unless ( defined $self->{PTYS}->{$pipe->{PTY_ID}} ) {
+		     ## do the require here to cause early error reporting
+		     require IO::Pty ;
+		     ## Just flag the pyt's existence for now.  It'll be
+		     ## converted to a real IO::Pty by _open_pipes.
+		     $self->{PTYS}->{$pipe->{PTY_ID}} = undef ;
+		  }
+	       }
+
 	       if (
 	          ( ref $pipe->{SOURCE} eq 'GLOB' 
 		  || isa( $pipe->{SOURCE}, 'IO::Handle' ) 
 		  )
-	       && $pipe->{TYPE} ne '<|<'
+	       && $pipe->{TYPE} !~ /^<(pty<|pipe)$/
 	       ) {
 		  $pipe->{DONT_CLOSE} = 1 ; ## this FD is not closed by us.
 	       }
@@ -1192,32 +1293,46 @@ sub harness {
 
 	 }
 
-	 elsif ( /^()   (>>?) (&)   (.*)$/x
-	    ||   /^()   (&)   (>\|>) ()$/x 
-	    ||   /^(\d*)()    (>\|>) ()$/x
-	    ||   /^()   (&)   (>>?) (.*)$/x 
-	    ||   /^(\d*)()    (>>?) (.*)$/x
+	 elsif ( /^()   (>>?)  (&)     ()      (.*)$/x
+	    ||   /^()   (&)    (>pipe) ()      ()  $/x 
+	    ||   /^()   (>pipe)(&)     ()      ()  $/x 
+	    ||   /^(\d*)()     (>pipe) ()      ()  $/x
+	    ||   /^()   (&)    (>pty)  ( \w*)> ()  $/x 
+## TODO:    ||   /^()   (>pty) (\d*)> (&) ()  $/x 
+	    ||   /^(\d*)()     (>pty)  ( \w*)> ()  $/x
+	    ||   /^()   (&)    (>>?)   ()      (.*)$/x 
+	    ||   /^(\d*)()     (>>?)   ()      (.*)$/x
 	 ) {
 	    croak "No command before '$_'" unless $cur_kid ;
 
 	    $ops_required = $first_parse ;
 
             my $pipe = {
-	       TYPE    => $3 eq '>|>' ? '>|>' : '>',
+	       TYPE    => $2 eq '>pipe' || $3 eq '>pipe'
+	          ? '>pipe'
+		  : $2 eq '>pty' || $3 eq '>pty'
+		     ? '>pty>'
+		     : '>',
 	       KFD     => length $1 ? $1 : 1,
 	       TRUNC   => ! ( $2 eq '>>' || $3 eq '>>' ),
+	       PTY_ID  => $2 eq '>pty' || $3 eq '>pty'
+	          ? length $4 ? $4 : 0
+		  : undef,
 	    } ;
 
 	    push @{$cur_kid->{OPS}}, $pipe ;
-	    my $stderr_too =  $2 eq '&' || $3 eq '&' ;
-	    if ( length $4 ) {
-	       $pipe->{DEST} = $4 ;
+	    my $stderr_too =
+	          $2 eq '&'
+	       || $3 eq '&'
+	       || ( ! length $1 && $pipe->{TYPE} =~ /^>pty/ ) ;
+	    if ( length $5 ) {
+	       $pipe->{DEST} = $5 ;
 	    }
 	    else {
 	       my @filters ;
 
 	       if ( $ops_required ) {
-		  ## unshift...shift: filters are from left to right after >
+		  ## unshift...shift: '>' filters source...sink left...right
 		  unshift @filters, shift @args
 		     while @args > 1 && ref $args[1] ;
 	       }
@@ -1234,6 +1349,16 @@ sub harness {
 		  scalar( @filters ),
 		  ' filters.'
 	       ) if @filters ;
+
+	       if ( $pipe->{TYPE} eq '>pty>' ) {
+		  unless ( defined $self->{PTYS}->{$pipe->{PTY_ID}} ) {
+		     ## do the require here to cause early error reporting
+		     require IO::Pty ;
+		     ## Just flag the pyt's existence for now.  _open_pipes()
+		     ## will new an IO::Pty for each key.
+		     $self->{PTYS}->{$pipe->{PTY_ID}} = undef ;
+		  }
+	       }
 
                ## Put a filter on the end of the filter chain to pass the
 	       ## output on to the CODE ref.  For SCALAR refs, the last
@@ -1257,7 +1382,7 @@ sub harness {
 	          (  isa( $pipe->{DEST}, 'GLOB' )
 		  || isa( $pipe->{DEST}, 'IO::Handle' )
 		  )
-	       && $pipe->{TYPE} ne '>|>'
+	       && $pipe->{TYPE} !~ /^>(pty>|pipe)$/
 	       ) {
 		  $pipe->{DONT_CLOSE} = 1 ; ## this FD is not closed by us.
 	       }
@@ -1328,6 +1453,7 @@ sub harness {
 	 }
       } ;
       push @errs, $@ if $@ ;
+      _debug "caught: $@" if $@ ;
    } }
 
    die join( '', @errs ) if @errs ;
@@ -1352,6 +1478,13 @@ sub _open_pipes {
    ## Output descriptors for the last command are shared by all children.
    ## @output_fds_accum accumulates the current set of output fds.
    my @output_fds_accum ;
+
+   for ( keys %{$self->{PTYS}} ) {
+      _debug "opening pty '", $_, "'" ;
+      my $pty = _pty ;
+      $pty->autoflush() ;
+      $self->{PTYS}->{$_} = $pty ;
+   }
 
    ## Loop through the kids and their OPS, interpreting any that require
    ## parent-side actions.
@@ -1437,7 +1570,7 @@ sub _open_pipes {
 	       }
 	       _init_filters( $op ) ;
 	    }
-	    elsif ( $op->{TYPE} eq '<|<' ) {
+	    elsif ( $op->{TYPE} eq '<pipe' ) {
 	       _debug(
 		  'kid to read ',
 		  $op->{KFD},
@@ -1447,8 +1580,56 @@ sub _open_pipes {
 	       open( $op->{SOURCE}, ">&=$w" )
 		  or croak "$! on write end of pipe" ;
 
-	       $op->{SOURCE} = $r ;
-	       $op->{TFD} = $r ;
+	       $op->{TFD}    = $r ;
+	       _init_filters( $op ) ;
+	    }
+	    elsif ( $op->{TYPE} eq '<pty<' ) {
+	       _debug(
+		  'kid to read ',
+		  $op->{KFD},
+		  " from pty '",
+		  $op->{PTY_ID},
+		  "'",
+	       ) ;
+	       
+	       for my $source ( $op->{SOURCE} ) {
+		  if ( isa( $source, 'SCALAR' ) ) {
+		     _debug(
+			"kid ",
+			$kid->{NUM},
+			" to read ",
+			$op->{KFD},
+			" from SCALAR via pty '",
+			$op->{PTY_ID},
+			"'"
+		     ) ;
+
+		     my $s = '' ;
+		     $op->{KIN_REF} = \$s ;
+		  }
+		  elsif ( isa( $source, 'CODE' ) ) {
+		     _debug(
+			"kid ",
+			$kid->{NUM},
+			" to read ",
+			$op->{KFD},
+			" from CODE via pty '",
+			$op->{PTY_ID},
+			"'"
+		     ) ;
+		     my $s = '' ;
+		     $op->{KIN_REF} = \$s ;
+		  }
+		  else {
+		     croak(
+			"'"
+			. ref( $source )
+			. "' not allowed as a source for '<pty<'redirection"
+		     ) ;
+		  }
+	       }
+	       $op->{FD} = $self->{PTYS}->{$op->{PTY_ID}}->fileno ;
+	       $op->{TFD} = undef ; # The fd isn't known until after fork().
 	       _init_filters( $op ) ;
 	    }
 	    elsif ( $op->{TYPE} eq '>' ) {
@@ -1479,7 +1660,7 @@ sub _open_pipes {
 	       }
 	       elsif ( isa( $dest, 'GLOB' ) ) {
 		  croak(
-		     "Unopened filehandle in output redirect, command $kid->{NUM}"
+		   "Unopened filehandle in output redirect, command $kid->{NUM}"
 		  ) unless defined fileno $dest ;
 		  ## Turn on autoflush, mostly just to flush out
 		  ## existing output.
@@ -1520,7 +1701,8 @@ sub _open_pipes {
 	       $output_fds_accum[$op->{KFD}] = $op ;
 	       _init_filters( $op ) ;
 	    }
-	    elsif ( $op->{TYPE} eq '>|>' ) {
+
+	    elsif ( $op->{TYPE} eq '>pipe' ) {
 	       ## N> output redirection to a pipe we open, but don't select()
 	       ## on.
 	       _debug(
@@ -1533,8 +1715,46 @@ sub _open_pipes {
 	       my ( $r, $w ) = _pipe() ;
 	       open( $op->{DEST}, "<&=$r" )
 		  or croak "$! duping read end of pipe" ;
-	       $op->{DEST} = $w ;
 	       $op->{TFD} = $w ;
+	       $output_fds_accum[$op->{KFD}] = $op ;
+	       _init_filters( $op ) ;
+	    }
+	    elsif ( $op->{TYPE} eq '>pty>' ) {
+	       my $dest = $op->{DEST} ;
+	       if ( isa( $dest, 'SCALAR' ) ) {
+		  _debug(
+		     "kid ",
+		     $kid->{NUM},
+		     " to write ",
+		     $op->{KFD},
+		     " to SCALAR via pty '",
+		     $op->{PTY_ID},
+		     "'"
+	       ) ;
+
+		  $$dest = '' if $op->{TRUNC} ;
+	       }
+	       elsif ( isa( $dest, 'CODE' ) ) {
+		  _debug(
+		     "kid ",
+		     $kid->{NUM},
+		     " to write ",
+		     $op->{KFD},
+		     " to CODE via pty '",
+		     $op->{PTY_ID},
+		     "'"
+		  ) ;
+	       }
+	       else {
+		  croak(
+		     "'"
+		     . ref( $dest )
+		     . "' not allowed as a sink for output redirection"
+		  ) ;
+	       }
+
+	       $op->{FD} = $self->{PTYS}->{$op->{PTY_ID}}->fileno ;
+	       $op->{TFD} = undef ; # The fd isn't known until after fork().
 	       $output_fds_accum[$op->{KFD}] = $op ;
 	       _init_filters( $op ) ;
 	    }
@@ -1555,9 +1775,13 @@ sub _open_pipes {
    } # end for ( KIDS )
    if ( @errs ) {
       for ( @close_on_fail ) {
-         no strict 'refs' ;
 	 _close( $_ ) ;
 	 $_ = undef ;
+      }
+      for ( keys %{$self->{PTYS}} ) {
+	 next unless $self->{PTYS}->{$_} ;
+         close $self->{PTYS}->{$_} ;
+         $self->{PTYS}->{$_} = undef ;
       }
       die join( '', @errs )
    }
@@ -1626,11 +1850,9 @@ sub _open_pipes {
 	       ' is my ',
 	       $_->{FD}
 	    );
-	    vec( $self->{ $_->{TYPE} eq '<' ? 'WIN' : 'RIN' }, $_->{FD}, 1 ) =1;
-	    if ( ! vec( $self->{EIN}, $_->{FD}, 1 ) ) {
-	       vec( $self->{EIN}, $_->{FD}, 1 ) = 1 ;
-	       push @{$self->{PIPES}}, $_ ;
-	    }
+	    vec( $self->{ $_->{TYPE} =~ /^</ ? 'WIN' : 'RIN' }, $_->{FD}, 1 ) =1;
+	    vec( $self->{EIN}, $_->{FD}, 1 ) = 1 ;
+	    push @{$self->{PIPES}}, $_ ;
 	 }
       }
       ++$num ;
@@ -1641,7 +1863,7 @@ sub _open_pipes {
    for my $pipe ( @{$self->{PIPES}} ) {
       $pipe->{SOURCE_EMPTY} = 0 ;
       $pipe->{PAUSED} = 0 ;
-      if ( $pipe->{TYPE} eq '>' ) {
+      if ( $pipe->{TYPE} =~ /^>/ ) {
 	 my $pipe_reader = sub {
 	    my ( undef, $out_ref ) = @_ ;
 
@@ -1650,8 +1872,13 @@ sub _open_pipes {
 
 	    vec( $self->{ROUT}, $pipe->{FD}, 1 ) = 0 ;
 
-	    _debug_fd( 'reading from ', $pipe ) ;
-	    my $in = _read( $pipe->{FD} ) ;
+	    _debug_fd( 'reading from', $pipe ) ;
+	    my $in = eval { _read( $pipe->{FD} ) } ;
+	    if ( $@ ) {
+	       $in = '' ;
+	       ## IO::Pty throws this if the kid dies.
+	       die $@ unless $@ =~ /^Input\/output error: read/ ;
+	    }
 
 	    unless ( length $in ) {
 	       $self->_clobber( $pipe ) ;
@@ -1727,13 +1954,39 @@ sub _do_kid {
    ## Don't close STDIN, STDOUT, STDERR: they should be inherited or
    ## overwritten below.
    my @needed = ( 1, 1, 1 ) ;
+
    for ( @{$kid->{OPS}} ) {
       $needed[ $_->{TFD} ] = 1 if defined $_->{TFD} ;
    }
+
    my @closed ;
-   for ( @{$self->{KIDS}} ) {
-      for ( @{$_->{OPS}} ) {
-         for ( $_->{FD}, ( $_ != $kid ? $_->{TFD} : () ) ) {
+   if ( %{$self->{PTYS}} ) {
+      ## Clean up the parent's fds.
+      for ( keys %{$self->{PTYS}} ) {
+	 _debug "Cleaning up parent's ptty '$_'" ;
+	 my $slave = $self->{PTYS}->{$_}->slave ;
+	 $closed[ $self->{PTYS}->{$_}->fileno ] = 1 ;
+	 close $self->{PTYS}->{$_} ;
+	 $self->{PTYS}->{$_} = $slave ;
+      }
+
+      ## Cast of the bonds of a controlling terminal
+      POSIX::setsid() || croak "POSIX::setsid() failed" ;
+      _debug "closing stdin, out, err" ;
+      close STDIN ;
+      close STDERR ;
+      close STDOUT ;
+      $closed[ $_ ] = 1 for ( 0..2 ) ;
+   }
+
+   for my $sibling ( @{$self->{KIDS}} ) {
+      for ( @{$sibling->{OPS}} ) {
+	 if ( $_->{TYPE} =~ /^.pty.$/ ) {
+	    $_->{TFD} = $self->{PTYS}->{$_->{PTY_ID}}->fileno ;
+	    $needed[$_->{TFD}] = 1 ;
+	 }
+
+         for ( $_->{FD}, ( $sibling != $kid ? $_->{TFD} : () ) ) {
 	    if ( defined $_ && ! $closed[$_] && ! $needed[$_] ) {
 	       _close( $_ ) ;
 	       $closed[$_] = 1 ;
@@ -1743,13 +1996,12 @@ sub _do_kid {
       }
    }
 
+   my @lazy_close ;
    for ( @{$kid->{OPS}} ) {
       if ( defined $_->{TFD} ) {
 	 unless ( $_->{TFD} == $_->{KFD} ) {
 	    _dup2_gently( $kid->{OPS}, $_->{TFD}, $_->{KFD} ) ;
-	    _close( $_->{TFD} ) ;
-	    $closed[$_->{TFD}] = 1 ;
-	    $_->{TFD} = undef ;
+	    push @lazy_close, $_->{TFD} ;
 	 }
       }
       elsif ( $_->{TYPE} eq 'dup' ) {
@@ -1767,6 +2019,13 @@ sub _do_kid {
       }
       elsif ( $_->{TYPE} eq 'init' ) {
          $_->{SUB}->() ;
+      }
+   }
+
+   for ( @lazy_close ) {
+      unless ( $closed[$_] ) {
+	 _close( $_ ) ;
+	 $closed[$_] = 1 ;
       }
    }
 
@@ -1863,7 +2122,7 @@ sub start {
 
 	       for my $k ( @{$self->{KIDS}} ) {
 		  for $op ( @{$k->{OPS}} ) {
-		     my $mode = $op->{TYPE} eq '>' ? 'w' : 'r' ;
+		     my $mode = $op->{TYPE} =~ /^>/ ? 'w' : 'r' ;
 		     for ( $op->{FD}, ( $k != $kid ? $_->{TFD} : () ) ) {
 			push @close_in_kid, IO::Handle->new_from_fd( $_, $mode )
 			   if defined $_ && ! $needed[ $_ ] ;
@@ -1873,7 +2132,7 @@ sub start {
 
 	       my @handle_map ;
 	       for $op ( @{$kid->{OPS}} ) {
-		  my $mode = $op->{TYPE} eq '>' ? 'w' : 'r' ;
+		  my $mode = $op->{TYPE} =~ /^>/ ? 'w' : 'r' ;
 		  push @handle_map, {
 		     mode    => $mode,
 		     open_as => IO::Handle->new_from_fd( $op->{KFD}, $mode ),
@@ -1928,11 +2187,27 @@ sub _clobber {
    my ( $file ) = @_ ;
    _debug_fd( "closing", $file ) ;
    my $doomed = $file->{FD} ;
-   vec( $self->{RIN}, $doomed, 1 ) = 0 ;
-   vec( $self->{WIN}, $doomed, 1 ) = 0 ;
+   my $dir = $file->{TYPE} =~ /^</ ? 'WIN' : 'RIN' ;
+   vec( $self->{$dir}, $doomed, 1 ) = 0 ;
    vec( $self->{EIN}, $doomed, 1 ) = 0 ;
-   _close( $doomed ) ;
-   @{$self->{PIPES}} = grep { $_->{FD} ne $doomed } @{$self->{PIPES}} ;
+   vec( $self->{PIN}, $doomed, 1 ) = 0 ;
+   if ( $file->{TYPE} =~ /^(.)pty.$/ ) {
+      if ( $1 eq '>' ) {
+         ## Only close output ptys.  This is so that ptys as inputs are
+	 ## never autoclosed, which would risk losing data that was
+	 ## in the slave->parent queue.
+	 _debug_fd "closing pty", $file ;
+	 close $self->{PTYS}->{$file->{PTY_ID}}
+	    if defined $self->{PTYS}->{$file->{PTY_ID}} ;
+	 $self->{PTYS}->{$file->{PTY_ID}} = undef ;
+      }
+   }
+   else {
+      _close( $doomed ) ;
+   }
+   @{$self->{PIPES}} = grep {
+      $_->{TYPE} ne $file->{TYPE} || $_->{FD} ne $file->{FD}
+   } @{$self->{PIPES}} ;
    $file->{FD} = undef ;
 }
 
@@ -1963,8 +2238,9 @@ SELECT:
       my $paused = 0 ;
 
       for my $file ( @{$self->{PIPES}} ) {
-         next unless $file->{PAUSED} && $file->{TYPE} eq '<' ;
+         next unless $file->{PAUSED} && $file->{TYPE} =~ /^</ ;
 
+	 _debug_fd( "checking", $file ) ;
 	 my $did ;
 	 1 while ( $did = _do_filters( $file ) ) ;
 	 if ( defined $file->{FD} && ! defined( $did ) || $did ) {
@@ -1979,19 +2255,19 @@ SELECT:
 	 }
       }
 
+      ## _do_filters may have closed our last fd.
+      last unless @{$self->{PIPES}} ;
+
       if ( $debug > 1 ) {
          my $map = join(
 	    '',
 	    map {
-	       my @out ;
-	       push @out, 'r', if vec( $self->{RIN}, $_, 1 ) ;
-	       push @out, 'w', if vec( $self->{WIN}, $_, 1 ) ;
-	       push @out, 'p', if vec( $self->{PIN}, $_, 1 ) ;
-	       ! @out
-		  ? '-'
-		  : @out == 1
-		     ? $out[0]
-		     : ( '(', @out, ')' ) ;
+	       my $out ;
+	       $out = 'r' if vec( $self->{RIN}, $_, 1 ) ;
+	       $out = $out ? 'b' : 'w' if vec( $self->{WIN}, $_, 1 ) ;
+	       $out = 'p' if ! $out && vec( $self->{PIN}, $_, 1 ) ;
+	       $out = '-' unless $out ;
+	       $out ;
 	    } (0..128)
 	 ) ;
 	 $map =~ s/((?:[a-z-]|\([^\)]*\)){12,}?)-*$/$1/ ;
@@ -2020,15 +2296,12 @@ SELECT:
          my $map = join(
 	    '',
 	    map {
-	       my @out ;
-	       push @out, 'r', if vec( $self->{ROUT}, $_, 1 ) ;
-	       push @out, 'w', if vec( $self->{WOUT}, $_, 1 ) ;
-	       push @out, 'e', if vec( $self->{EOUT}, $_, 1 ) ;
-	       ! @out
-		  ? '-'
-		  : @out == 1
-		     ? $out[0]
-		     : ( '(', @out, ')' ) ;
+	       my $out ;
+	       $out = 'r' if vec( $self->{RIN}, $_, 1 ) ;
+	       $out = $out ? 'b' : 'w' if vec( $self->{WIN}, $_, 1 ) ;
+	       $out = 'p' if ! $out && vec( $self->{PIN}, $_, 1 ) ;
+	       $out = '-' unless $out ;
+	       $out ;
 	    } (0..128)
 	 ) ;
 	 $map =~ s/((?:[a-z-]|\([^\)]*\)){12,}?)-*$/$1/ ;
@@ -2037,40 +2310,40 @@ SELECT:
 
       ## Need to copy since _clobber alters @{$self->{PIPES}}.
       ## TODO: Rethink _clobber().  Rething $file->{PAUSED}, too.
-      my @files = @{$self->{PIPES}} ;
+      my @pipes = @{$self->{PIPES}} ;
    FILE:
-      for my $file ( @files ) {
-	 if ( vec( $self->{ROUT}, $file->{FD}, 1 ) ) {
-	    if ( $file->{IS_DEBUG} ) {
+      for my $pipe ( @pipes ) {
+	 if ( $pipe->{TYPE} =~ /^>/ && vec( $self->{ROUT}, $pipe->{FD}, 1 ) ) {
+	    if ( $pipe->{IS_DEBUG} ) {
 	       ## When receiving debug messages, use POSIX.  We don't want to 
 	       ## have _read and _write log things for us.
 	       my $in ;
-	       my $c = POSIX::read( $file->{FD}, $in, 100000 ) ;
+	       my $c = POSIX::read( $pipe->{FD}, $in, 100000 ) ;
 	       if( defined $c && $c > 0 ) {
 		  POSIX::write( $debug_fd, $in, length $in ) ;
 	       }
 	       else {
-	          $self->_clobber( $file ) ;
+	          $self->_clobber( $pipe ) ;
 	       }
 
 	       next FILE ;
 	    }
 
-	    _debug_fd( "filtering data from", $file ) ;
-	    $io_occurred = 1 if _do_filters( $file ) ;
+	    _debug_fd( "filtering data from", $pipe ) ;
+	    $io_occurred = 1 if _do_filters( $pipe ) ;
 
-	    next FILE unless defined $file->{FD} ;
+	    next FILE unless defined $pipe->{FD} ;
 	 }
 
-	 if ( vec( $self->{WOUT}, $file->{FD}, 1 ) ) {
-	    _debug_fd( "filtering data to", $file ) ;
-	    $io_occurred = 1 if _do_filters( $file ) ;
+	 if ( $pipe->{TYPE} =~ /^</ && vec( $self->{WOUT}, $pipe->{FD}, 1 ) ) {
+	    _debug_fd( "filtering data to", $pipe ) ;
+	    $io_occurred = 1 if _do_filters( $pipe ) ;
 
-	    next FILE unless defined $file->{FD} ;
+	    next FILE unless defined $pipe->{FD} ;
 	 }
 
-	 if ( vec( $self->{EOUT}, $file->{FD}, 1 ) ) {
-	    croak "Exception on file $file->{FD}" ;
+	 if ( vec( $self->{EOUT}, $pipe->{FD}, 1 ) ) {
+	    croak "Exception on pipe $pipe->{FD}" ;
 	 }
       }
    }
@@ -2083,8 +2356,16 @@ sub _cleanup {
    my $self = shift ;
    my $num = 0 ;
    _debug "cleaning up" ;
-   ## _clobber modified PIPES
+
+   for ( values %{$self->{PTYS}} ) {
+      next unless ref $_ ;
+      close $_->slave ;
+      close $_ ;
+   }
+   
+   ## _clobber modifies PIPES
    $self->_clobber( $self->{PIPES}->[0] ) while @{$self->{PIPES}} ;
+
    for my $kid ( @{$self->{KIDS}} ) {
       if ( ! length $kid->{PID} ) {
 	 _debug 'never ran child ', $num++, ", can't reap" ;
@@ -2101,7 +2382,7 @@ sub _cleanup {
 
       if ( defined $kid->{DEBUG_FD} ) {
          @{$kid->{OPS}} = grep {
-	    $_->{KFD} != $kid->{DEBUG_FD}
+	    ! defined $_->{KFD} || $_->{KFD} != $kid->{DEBUG_FD}
 	 } @{$kid->{OPS}} ;
 	 $kid->{DEBUG_FD} = undef ;
       }
@@ -2249,7 +2530,8 @@ sub finish {
       $self->{non_blocking} = 0 ;
       $self->{auto_close_ins} = 1 ;
       $self->{break_on_io} = 0 ;
-      # We don't alter $self->{clear_ins}
+      # We don't alter $self->{clear_ins}, start() and run() control it.
+
       $self->_select_loop( $options ) if @{$self->{PIPES}} ;
    } ;
    my $x = $@ ;
@@ -2818,6 +3100,8 @@ Ability to add external file descriptors w/ filter chains and endpoints.
 Ability to add timeouts and timing generators (i.e. repeating timeouts).
 
 High resolution timeouts.
+
+Convert to using "use fields", for performance & stability.
 
 =head1 LIMITATIONS
 
