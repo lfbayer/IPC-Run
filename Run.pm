@@ -8,7 +8,7 @@ package IPC::Run ;
 
 =head1 NAME
 
-IPC::Run - Run subprocesses w/ piping, redirection, and pseudo-ttys
+IPC::Run - system() and background procs w/ piping, redirs, ptys (Unix, Win32)
 
 =head1 SYNOPSIS
 
@@ -1007,7 +1007,7 @@ in their exit codes.
 
 =cut
 
-$VERSION=0.56 ;
+$VERSION = 0.6 ;
 
 @ISA = qw( Exporter ) ;
 
@@ -1028,6 +1028,7 @@ my @API        = qw(
    signal kill_kill reap_nb
    io timer timeout
    close_terminal
+   binary
 ) ;
 
 @EXPORT_OK = ( @API, @FILTER_IMP, @FILTERS, qw( filter_tests ) ) ;
@@ -1950,13 +1951,23 @@ sub harness {
             my $source = $5 ;
 
             my @filters ;
+            my $binmode ;
 
             unless ( length $source ) {
                if ( ! $succinct ) {
-                  push @filters, shift @args
-                     while @args > 1
-                         && ref $args[1]
-                         && ! isa $args[1], "IPC::Run::Timer" ;
+                  while ( @args > 1
+                      && (
+                         ( ref $args[1] && ! isa $args[1], "IPC::Run::Timer" )
+                         || isa $args[0], "IPC::Run::binmode_pseudo_filter"
+                      )
+                  ) {
+                     if ( isa $args[0], "IPC::Run::binmode_pseudo_filter" ) {
+                        $binmode = shift( @args )->() ;
+                     }
+                     else {
+                        push @filters, shift @args
+                     }
+                  }
                }
                $source = shift @args ;
                croak "'$_' missing a source" if _empty $source ;
@@ -1968,7 +1979,7 @@ sub harness {
             } ;
 
             my IPC::Run::IO $pipe = IPC::Run::IO->_new_internal(
-               $type, $kfd, $pty_id, $source, @filters
+               $type, $kfd, $pty_id, $source, $binmode, @filters
             ) ;
 
             if ( ( ref $source eq 'GLOB' || isa $source, 'IO::Handle' )
@@ -2018,13 +2029,23 @@ sub harness {
 
             my $dest = $5 ;
             my @filters ;
+            my $binmode = 0 ;
             unless ( length $dest ) {
                if ( ! $succinct ) {
                   ## unshift...shift: '>' filters source...sink left...right
-                  unshift @filters, shift @args
-                     while @args > 1
-                         && ref $args[1]
-                         && ! isa $args[1], "IPC::Run::Timer" ;
+                  while ( @args > 1
+                     && ( 
+                        ( ref $args[1] && !  isa $args[1], "IPC::Run::Timer" )
+                        || isa $args[0], "IPC::Run::binmode_pseudo_filter"
+                     )
+                  ) {
+                     if ( isa $args[0], "IPC::Run::binmode_pseudo_filter" ) {
+                        $binmode = shift( @args )->() ;
+                     }
+                     else {
+                        unshift @filters, shift @args ;
+                     }
+                  }
                }
 
                $dest = shift @args ;
@@ -2045,7 +2066,7 @@ sub harness {
 
             croak "'$_' missing a destination" if _empty $dest ;
             my $pipe = IPC::Run::IO->_new_internal(
-               $type, $kfd, $pty_id, $dest, @filters
+               $type, $kfd, $pty_id, $dest, $binmode, @filters
             ) ;
             $pipe->{TRUNC} = $trunc ;
 
@@ -3646,19 +3667,35 @@ process and a scalar or subroutine endpoint.
 
 =over
 
+=item binary
+
+   run \@cmd, ">", binary, \$out ;
+   run \@cmd, ">", binary, \$out ;  ## Any TRUE value to enable
+   run \@cmd, ">", binary 0, \$out ;  ## Any FALSE value to disable
+
+This is a constructor for a "binmode" "filter" that tells IPC::Run to keep
+the carriage returns that would ordinarily be edited out for you (binmode
+is usually off).  This is not a real filter, but an option masquerading as
+a filter.
+
+It's not named "binmode" because you're likely to want to call Perl's binmode
+in programs that are piping binary data around.
+
+=cut
+
+sub binary(;$) {
+   my $enable = @_ ? shift : 1 ;
+   return bless sub { $enable }, "IPC::Run::binmode_pseudo_filter" ;
+}
+
 =item new_chunker
 
 This breaks a stream of data in to chunks, based on an optional
 scalar or regular expression parameter.  The default is the Perl
 input record separator in $/, which is a newline be default.
 
-   run( \@cmd,
-      '>', new_chunker, \&lines_handler,
-   ) ;
-
-   run( \@cmd,
-      '>', new_chunker( "\r\n" ), \&lines_handler,
-   ) ;
+   run \@cmd, '>', new_chunker, \&lines_handler ;
+   run \@cmd, '>', new_chunker( "\r\n" ), \&lines_handler ;
 
 Because this uses $/ by default, you should always pass in a parameter
 if you are worried about other code (modules, etc) modifying $/.
@@ -4119,7 +4156,7 @@ sub filter_tests($;@) {
    return (
       sub {
          $h = harness() ;
-         $op = IPC::Run::IO->_new_internal( '<', 0, 0, 0,
+         $op = IPC::Run::IO->_new_internal( '<', 0, 0, 0, undef,
                new_string_sink( \$output ),
                @filters,
                new_string_source( \@input ),
@@ -4447,14 +4484,14 @@ non-inheritable but we don't C<exec()> for &sub processes.
 The second problem is that Perl's DESTROY subs and other on-exit cleanup gets
 run in the child process.  If objects are instantiated in the parent before the
 child is forked, the the DESTROY will get run once in the parent and once in
-the child.  The workaround for this is to do something a C<kill $$, 0>,
-C<POSIX::_exit> or an C<exec $^X, "-e1"> (which execs perl on a trivial
-program).  The problem with the workaround is that this prevents DESTROY and
-on-exit cleanup from being called on any objects created in the child since the
-C<fork>.  The C<kill> technique is not available on all systems.  I haven't
-tried the C<POSIX::_exit> technique or the C<exec $^X, "-e1"> techniques.  Let
-me know what works for you.  This is why I don't have IPC::Run do this for you.
-It's "mostly safe" since child coprocesses are often simple, but
+the child.  When coprocess subs exit, POSIX::exit is called to work around this,
+but it means that objects that are still referred to at that time are not
+cleaned up.  So setting package vars or closure vars to point to objects that
+rely on DESTROY to affect things outside the process (files, etc), will
+lead to bugs.
+
+I goofed on the syntax: "<pipe" vs. "<pty<" and ">filename" are both
+oddities.
 
 =head1 TODO
 

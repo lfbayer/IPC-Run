@@ -118,6 +118,7 @@ use fields (
 			# prevent circrefs.
     'FAKE_PIPE',        # Used to hold the "fake pipe" objects on Win32,
                         # since Win32 requires a lot of extra monkey business.
+    'BINMODE',          # If you want all the data on Win32...
 ) ;
 
 sub _empty($) ;
@@ -143,7 +144,7 @@ sub new {
       unless $type =~ /^(?:<<?|>>?)$/ ;
 
    my IPC::Run::IO $self = $class->_new_internal(
-      $type, undef, undef, $internal, @_
+      $type, undef, undef, $internal, undef, @_
    ) ;
 
    if ( ! ref $external ) {
@@ -173,13 +174,14 @@ sub _new_internal {
       $self = bless [ \%{"$class\::FIELDS"} ], $class ;
    }
 
-   my ( $type, $kfd, $pty_id, $internal, @filters ) = @_ ;
+   my ( $type, $kfd, $pty_id, $internal, $binmode, @filters ) = @_ ;
 
    # Older perls (<=5.00503, at least) don't do list assign to
    # psuedo-hashes well.
    $self->{TYPE}    = $type ;
    $self->{KFD}     = $kfd ;
    $self->{PTY_ID}  = $pty_id ;
+   $self->binmode( $binmode ) ;
    $self->{FILTERS} = [ @filters ] ;
 
    ## Add an adapter to the end of the filter chain (which is usually just the
@@ -363,7 +365,9 @@ sub open_pipe {
 
    if ( Win32_MODE ) {
       ( $self->{FAKE_PIPE}, $self->{FD}, $self->{TFD} ) =
-         win32_fake_pipe( $self->dir, $child_debug_fd, $parent_handle ) ;
+         win32_fake_pipe(
+            $self->dir, $child_debug_fd, $parent_handle, 
+            $self->binmode() ) ;
    }
    else {
       if ( $dir eq "<" ) {
@@ -481,6 +485,22 @@ sub op {
 
    return $self->{TYPE} ;
 }
+
+=item binmode
+
+Sets/gets whether this pipe is in binmode or not.  No effect off of Win32
+OSs, of course, and on Win32, no effect after the harness is start()ed.
+
+=cut
+
+sub binmode {
+   my IPC::Run::IO $self = shift ;
+
+   $self->{BINMODE} = shift if @_ ;
+
+   return $self->{BINMODE} ;
+}
+
 
 =item dir
 

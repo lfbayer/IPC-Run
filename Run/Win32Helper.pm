@@ -380,6 +380,7 @@ _debug "PUMP_PIPE_HANDLE = ", fileno $self->{PUMP_PIPE_HANDLE} ;
 
    ## Both PUMP_..._HANDLEs will be closed, no need to worry about
    ## inheritance.
+   _debug "binmode on" if _debugging_details && $binmode ;
    _spawn_pumper(
       ( $dir eq "<" )
 	 ? ( $self->{PUMP_SOCKET_HANDLE}, $self->{PUMP_PIPE_HANDLE} )

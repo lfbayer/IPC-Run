@@ -18,6 +18,7 @@ eg/runsh
 eg/runsu
 eg/synopsis_scripting
 t/adopt.t
+t/binmode.t
 t/bogus.t
 t/filter.t
 t/harness.t

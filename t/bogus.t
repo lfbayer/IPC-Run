@@ -15,6 +15,23 @@ use UNIVERSAL qw( isa ) ;
 
 my $r ;
 
+sub Win32_MODE() ;
+*Win32_MODE = \&IPC::Run::Win32_MODE ;
+
+## Win32 does not support a lot of things that Unix does.  These
+## skip_unless subs help that.
+##
+## TODO: There are also a few things that Win32 supports (passing Win32 OS
+## handles) that we should test for, conversely.
+sub skip_unless_exec(&) {
+   if ( Win32_MODE ) {
+      return sub {
+         skip "Can't really exec() $^O", 0 ;
+      } ;
+   }
+   shift ;
+}
+
 my @tests = (
 sub {
    ## Older Test.pm's don't grok qr// in $expected.
@@ -24,7 +41,7 @@ sub {
    ok $got, $expected, "starting ./bogus_really_bogus" ;
 },
 
-sub {
+skip_unless_exec {
    ## Older Test.pm's don't grok qr// in $expected.
    my $expected = 'exec failed' ;
    my $h = eval {
