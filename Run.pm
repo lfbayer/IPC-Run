@@ -124,7 +124,7 @@ IPC::Run - Run subprocesses w/ piping, redirection, and pseudo-ttys
       # etc.
 
    # Passing options:
-      run \@cat, 'in.txt', { debug => 1 } ;
+      run \@cat, 'in.txt', debug => 1 ;
 
    # Call this system's shell, returns TRUE on 0 exit code
    # THIS IS THE OPPOSITE SENSE OF system()'s RETURN VALUE
@@ -767,9 +767,14 @@ specification:
 
 =head2 Options
 
-Options are passed in a hash as the final parameter to run():
+Options are passed in as name/value pairs:
 
-   run \@cat, \$in, { debug => 1 } ;
+   run \@cat, \$in, debug => 1 ;
+
+If you pass the debug option, you may want to pass it in first, so you
+can see what parsing is going on:
+
+   run debug => 1, \@cat, \$in ;
 
 =over
 
@@ -779,11 +784,6 @@ Enables debugging output in parent and child.  Children emit debugging
 info over a separate, dedicated pipe to the parent, so you must pump(),
 pump_nb(), or finish() if you use start().  This pipe is not created
 unless debugging is enabled.
-
-=item timeout
-
-Same as calling timeout() immediately before the run(), harness(), or 
-start() calls it is passed to.
 
 =back
 
@@ -828,7 +828,7 @@ use Fcntl ;
 use POSIX () ;
 use Symbol ;
 
-$VERSION = '0.4' ;
+$VERSION = '0.42' ;
 
 @ISA = qw( Exporter ) ;
 
@@ -933,7 +933,8 @@ sub get_more_input() ;
 ##
 sub _newed()    {0}
 sub _harnessed(){1}
-sub _started()  {2}
+sub _finished() {2}   ## _finished behave almost exactly like _harnessed
+sub _started()  {3}
 
 ##
 ## Debugging routines
@@ -979,7 +980,7 @@ sub _debug {
       ( $debug > 2 ? ( _map_fds, ' ' ) : () ),
    ) ;
 
-   my $msg = join( '', map { defined $_ ? $_ : "<undef>" } @_ ) ;
+   my $msg = join( '', map defined $_ ? $_ : "<undef>", @_ ) ;
    chomp $msg ;
    $msg =~ s{^}{$prefix}gm ;
    $msg .= "\n" ;
@@ -1235,9 +1236,14 @@ you.  You can't pass harness specifications to pump(), though.
 ## the DWIMer guesses wrong.
 ##
 sub harness {
-   my $options = ref $_[-1] eq 'HASH' ? pop : {} ;
+   my $options ;
+   if ( @_ && ref $_[-1] eq 'HASH' ) {
+      $options = pop ;
+      require Data::Dumper ;
+      carp "Passing in options as a hash is deprecated:\n", Data::Dumper::Dumper( $options ) ;
+   }
 
-   local $debug = $options->{debug} if defined $options->{debug} ;
+   local $debug = $options->{debug} if $options && defined $options->{debug} ;
 
    my @args ;
 
@@ -1249,7 +1255,7 @@ sub harness {
       }
       @args = ( [ @shell, @_ ] ) ;
    }
-   elsif ( @_ > 1 && ! grep { ref $_ } @_ ) {
+   elsif ( @_ > 1 && ! grep ref $_, @_ ) {
       @args = ( [ @_ ] ) ;
    }
    else {
@@ -1273,14 +1279,16 @@ sub harness {
       $self = bless [ \%{"FIELDS"} ], __PACKAGE__ ;
    }
 
-   %$self = (
-         IOS        => [],
-	 KIDS       => [],
-	 PIPES      => [],
-	 PTYS       => {},
-	 STATE      => _newed,
-         %$options,
-   ) ;
+   $self->{IOS}   = [] ;
+   $self->{KIDS}  = [] ;
+   $self->{PIPES} = [] ;
+   $self->{PTYS}  = {} ;
+   $self->{STATE} = _newed ;
+
+   if ( $options ) {
+      $self->{$_} = $options->{$_}
+	 for keys %$options ;
+   }
 
    _debug "** harnessing" ;
 
@@ -1294,7 +1302,7 @@ sub harness {
 	    "parsing ",
 	    defined $_
 	       ? ref $_ eq 'ARRAY'
-	          ? ( '[ ', join( ', ', map{ "'$_'" } @$_ ), ' ]' )
+	          ? ( '[ ', join( ', ', map "'$_'", @$_ ), ' ]' )
 		  : ( ref $_
 		     || ( length $_ < 10
 			   ? "'$_'"
@@ -1514,7 +1522,19 @@ sub harness {
 	    $cur_kid    = undef ;
 	 }
 
-	 elsif ( /^init$/ ) {
+	 elsif ( $_ eq 'init' ) {
+	    croak "No command before '$_'" unless $cur_kid ;
+	    push @{$cur_kid->{OPS}}, {
+	       TYPE => 'init',
+	       SUB  => shift @args,
+	    } ;
+	 }
+
+	 elsif ( ! ref $_ ) {
+	    $self->{$_} = shift @args ;
+	 }
+
+	 elsif ( $_ eq 'init' ) {
 	    croak "No command before '$_'" unless $cur_kid ;
 	    push @{$cur_kid->{OPS}}, {
 	       TYPE => 'init',
@@ -1555,6 +1575,7 @@ sub harness {
    } }
 
    die join( '', @errs ) if @errs ;
+
 
    $self->{STATE} = _harnessed ;
 #   $self->timeout( $options->{timeout} ) if exists $options->{timeout} ;
@@ -2141,8 +2162,13 @@ for more information.
 =cut
 
 sub start {
-   my $options = @_ > 1 && ref $_[-1] eq 'HASH' ? pop : {} ;
-   local $debug = $options->{debug} if defined $options->{debug} ;
+   my $options ;
+   if ( @_ && ref $_[-1] eq 'HASH' ) {
+      $options = pop ;
+      require Data::Dumper ;
+      carp "Passing in options as a hash is deprecated:\n", Data::Dumper::Dumper( $options ) ;
+   }
+   local $debug = $options->{debug} if $options && defined $options->{debug} ;
 
    my IPC::Run $self ;
    if ( @_ == 1 && isa( $_[0], __PACKAGE__ ) ) {
@@ -2150,9 +2176,10 @@ sub start {
       $self->{$_} = $options->{$_} for keys %$options ;
    }
    else {
-      $self = harness( @_, $options ) ;
+      $self = harness( @_, $options ? $options : () ) ;
    }
 
+   local $debug = $self->{debug} if defined $self->{debug} ;
    _debug "** starting" ;
 
    ## Assume we're not being called from &run.  It will correct our
@@ -2193,9 +2220,10 @@ sub start {
 		  'spawning ',
 		  join(
 		     ' ',
-		     map {
-			"'$_'"
-		     } ( $kid->{PATH}, @{$kid->{VAL}}[1..$#{$kid->{VAL}}] )
+		     map(
+			"'$_'",
+			( $kid->{PATH}, @{$kid->{VAL}}[1..$#{$kid->{VAL}}] )
+		     )
 		  )
 	       ) ;
 	       require IPC::Open3 ;
@@ -2269,6 +2297,7 @@ sub start {
 	 }
       }
    }
+confess "gak!" unless defined $self->{PIPES} ;
 
    if ( @errs ) {
       eval { $self->_cleanup } ;
@@ -2307,9 +2336,9 @@ sub _clobber {
    else {
       _close( $doomed ) ;
    }
-   @{$self->{PIPES}} = grep {
-      defined $_->{FD} && ( $_->{TYPE} ne $file->{TYPE} || $_->{FD} ne $doomed);
-   } @{$self->{PIPES}} ;
+   @{$self->{PIPES}} = grep
+      defined $_->{FD} && ( $_->{TYPE} ne $file->{TYPE} || $_->{FD} ne $doomed),
+   @{$self->{PIPES}} ;
    $file->{FD} = undef ;
 }
 
@@ -2505,23 +2534,21 @@ sub _cleanup {
       }
 
       if ( defined $kid->{DEBUG_FD} ) {
-         @{$kid->{OPS}} = grep {
-	    ! defined $_->{KFD} || $_->{KFD} != $kid->{DEBUG_FD}
-	 } @{$kid->{OPS}} ;
+         @{$kid->{OPS}} = grep
+	    ! defined $_->{KFD} || $_->{KFD} != $kid->{DEBUG_FD},
+	    @{$kid->{OPS}} ;
 	 $kid->{DEBUG_FD} = undef ;
       }
 
       for my $op ( @{$kid->{OPS}} ) {
 	 @{$op->{FILTERS}} = grep {
 	    my $filter = $_ ;
-	    ! grep {
-	       $filter == $_ ;
-	    } @{$self->{TEMP_FILTERS}} ;
+	    ! grep $filter == $_, @{$self->{TEMP_FILTERS}} ;
 	 } @{$op->{FILTERS}} ;
       }
 
    }
-   $self->{STATE} = _harnessed ;
+   $self->{STATE} = _finished ;
    @{$self->{TEMP_FILTERS}} = () ;
 }
 
@@ -2633,7 +2660,8 @@ This must be called after the last start() or pump() call for a harness,
 or your system will accumulate defunct processes and you may "leak"
 file descriptors.
 
-finish() returns TRUE if all children returned 0, and FALSE otherwise (this
+finish() returns TRUE if all children returned 0 (and were not signaled and
+did not coredump, ie ! $?), and FALSE otherwise (this
 is like run(), and the opposite of system()).
 
 Once a harness has been finished, it may be run() or start()ed again,
@@ -2664,8 +2692,134 @@ sub finish {
    warn $@ if $@ ;
    die $x if $x ;
 
-   return ! grep { $_->{RESULT} } @{$self->{KIDS}} ;
+   return ! $self->full_result ;
 }
+
+
+=item result
+
+   $h->result ;
+
+Returns the first non-zero result code (ie $? >> 8).  See L</full_result> to 
+get the $? value for a child process.
+
+To get the result of a particular child, do:
+
+   $h->result( 0 ) ;  # first child's $? >> 8
+   $h->result( 1 ) ;  # second child
+
+or
+
+   ($h->results)[0]
+   ($h->results)[1]
+
+Returns undef if no child processes were spawned and no child number was
+specified.  Throws an exception if an out-of-range child number is passed.
+
+=cut
+
+sub _assert_finished {
+   my IPC::Run $self = $_[0] ;
+
+   croak "Harness not run" unless $self->{STATE} >= _finished ;
+   croak "Harness not finished running" unless $self->{STATE} == _finished ;
+}
+
+
+sub result {
+   &_assert_finished ;
+   my IPC::Run $self = shift ;
+   
+   if ( @_ ) {
+      my ( $which ) = @_ ;
+      croak(
+         "Only ",
+	 scalar( @{$self->{KIDS}} ),
+         " child processes, no process $which"
+      )
+         unless $which >= 0 && $which <= $#{$self->{KIDS}} ;
+      return $self->{KIDS}->[$which]->{RESULT} >> 8 ;
+   }
+   else {
+      return undef unless @{$self->{KIDS}} ;
+      for ( @{$self->{KIDS}} ) {
+	 return $_->{RESULT} >> 8 if $_->{RESULT} >> 8 ;
+      }
+   }
+}
+
+
+=item results
+
+Returns a list of child exit values.  See L</full_results> if you want to
+know if a signal killed the child.
+
+Throws an exception if the harness is not in a finished state.
+ 
+=cut
+
+sub results {
+   &_assert_finished ;
+   my IPC::Run $self = shift ;
+
+   return map $_->{RESULT} >> 8, @{$self->{KIDS}} ;
+}
+
+
+=item full_result
+
+   $h->full_result ;
+
+Returns the first non-zero $?.  See L</result> to get the first $? >> 8 
+value for a child process.
+
+To get the result of a particular child, do:
+
+   $h->full_result( 0 ) ;  # first child's $? >> 8
+   $h->full_result( 1 ) ;  # second child
+
+or
+
+   ($h->full_results)[0]
+   ($h->full_results)[1]
+
+Returns undef if no child processes were spawned and no child number was
+specified.  Throws an exception if an out-of-range child number is passed.
+
+=cut
+
+sub full_result {
+   goto &result if @_ > 1 ;
+   &_assert_finished ;
+
+   my IPC::Run $self = shift ;
+
+   return undef unless @{$self->{KIDS}} ;
+   for ( @{$self->{KIDS}} ) {
+      return $_->{RESULT} if $_->{RESULT} ;
+   }
+}
+
+
+=item full_results
+
+Returns a list of child exit values as returned by C<wait>.  See L</results>
+if you don't care about coredumps or signals.
+
+Throws an exception if the harness is not in a finished state.
+ 
+=cut
+
+sub full_results {
+   &_assert_finished ;
+   my IPC::Run $self = shift ;
+
+   croak "Harness not run" unless $self->{STATE} >= _finished ;
+   croak "Harness not finished running" unless $self->{STATE} == _finished ;
+
+   return map $_->{RESULT}, @{$self->{KIDS}} ;
+}
+
 
 ##
 ## Filter Scaffolding
@@ -3269,7 +3423,7 @@ each child process is likely to be blessed into IPC::Run::Proc.
 
 $kid->abort(), $kid->kill(), $kid->signal( $num_or_name ).
 
-Allow retrieving each kid's result code.
+Write tests for /(full_)?results?/ subs.
 
 Currently, pump() and run() only work on systems where select() works on the
 filehandles returned by pipe().  This does *not* include Win32.  I'd

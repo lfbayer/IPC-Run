@@ -323,11 +323,9 @@ sub new {
       $self = bless [ \%{"$class\::FIELDS"} ], $class ;
    }
 
-   %$self = (
-      STATE => 0,
-      DEBUG => 0,
-      NAME  => "timer #" . ++$timer_counter,
-   ) ;
+   $self->{STATE} = 0 ;
+   $self->{DEBUG} = 0 ;
+   $self->{NAME}  = "timer #" . ++$timer_counter ;
 
    while ( @_ ) {
       my $arg = shift ;

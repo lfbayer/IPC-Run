@@ -674,12 +674,12 @@ sub { ok( $err =~ qr/^(?:[12]:Hello World.*){2}$/s ) },
 ## A few error cases...
 ##
 sub {
-   eval { $r = run \@perl, '<', {}, {} } ;
+   eval { $r = run \@perl, '<', [], [] } ;
    ok( $@ =~ qr/not allowed/ ) ;
 },
 
 sub {
-   eval { $r = run \@perl, '>', {}, {} } ;
+   eval { $r = run \@perl, '>', [], [] } ;
    ok( $@ =~ qr/not allowed/ ) ;
 },
 
@@ -699,7 +699,7 @@ sub {
    $fd_map = map_fds ;
    eval {
       $r = run( \@emitter, '>', \$out, '2>', \$err,
-	 { _simulate_fork_failure => 1 }
+	 _simulate_fork_failure => 1
       ) ;
    } ;
    ok( $@ ) ;
@@ -713,7 +713,7 @@ sub { ok( $err, '' ) },
 sub {
    $fd_map = map_fds ;
    eval {
-      $r = run \@perl, '<file', {_simulate_open_failure => 1} ;
+      $r = run \@perl, '<file', _simulate_open_failure => 1 ;
    } ;
    ok( $@ ) ;
 },
@@ -723,7 +723,7 @@ sub { ok( map_fds, $fd_map ) },
 sub {
    $fd_map = map_fds ;
    eval {
-      $r = run \@perl, '>file', {_simulate_open_failure => 1} ;
+      $r = run \@perl, '>file', _simulate_open_failure => 1 ;
    } ;
    ok( $@ ) ;
 },

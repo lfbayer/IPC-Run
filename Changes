@@ -1,5 +1,11 @@
 Revision history for Perl extension IPC::Run
 
+0.41
+   - Added result, results, full_result, full_results.  I added so many
+     variations because I expect that result and full_result are the most
+     likely to get a lot of use, but I wanted to be able to return a list
+     as well, without misusing wantarray.
+
 0.4  Thu Jun 15 14:59:22 EDT 2000
    - Added IPC::Run::IO and IPC::Run::Timer, bunches of tests.  IPC::Run
      can now do more than just run child processes.

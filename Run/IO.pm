@@ -156,12 +156,12 @@ sub _new_internal {
 
    my ( $type, $kfd, $pty_id, $internal, @filters ) = @_ ;
 
-   %$self = (
-      TYPE    => $type,
-      KFD     => $kfd,
-      PTY_ID  => $pty_id,
-      FILTERS => [ @filters ],
-   ) ;
+   # Older perls (<=5.00503, at least) don't do list assign to
+   # psuedo-hashes well.
+   $self->{TYPE}    = $type ;
+   $self->{KFD}     = $kfd ;
+   $self->{PTY_ID}  = $pty_id ;
+   $self->{FILTERS} = [ @filters ] ;
 
    if ( $self->op =~ />/ ) {
       croak "'$_' missing a destination" if _empty $internal ;
@@ -429,10 +429,9 @@ use vars (
 ) ;
 
 sub _init_filters {
-   my $self = shift ;
+   my IPC::Run::IO $self = shift ;
 
-confess "WHOA" unless isa( $self, "IPC::Run::IO" ) ;
-
+confess "\$self not an IPC::Run::IO" unless isa( $self, "IPC::Run::IO" ) ;
    $self->{FBUFS} = [] ;
 
    $self->{FBUFS}->[0] = $self->{DEST}
