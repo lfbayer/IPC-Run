@@ -1,5 +1,23 @@
 Revision history for Perl extension IPC::Run
 
+0.77 Fri Sep 26 15:36:56 EDT 2003
+   - Non-binmoded pipes are now s/\r//g on Win32
+   - Passes all tests on WinXPPro and WinNT
+   - Deadlocks somewhere shortly after process creation on Win2K
+     in some cases
+
+0.76
+   - Does not use pseudohashes for perls >= 5.9.0 (reported by several
+     users, patch by Nicholas Clark <nick@unfortu.net>)
+   - pumpable() is now exported (reported by fetko@slaysys.com)
+   - pumpable() now more thorough in checking for a dead child (reported
+     by fetko@slaysys.com)
+       - it checks for reapable processes when all pipes to the process
+         are paused
+       - pumpable() now yields the processor when all pipes to
+   - Distro layout improved: Run.pm and Run/... are now under
+     lib/IPC/...
+
 0.75 Tue Jan 28 11:33:40 EST 2003
    - Fix a bug that was causing _pipe() to seem to fail when feeding
 

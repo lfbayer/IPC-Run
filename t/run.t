@@ -308,6 +308,46 @@ sub { ok( _map_fds, $fd_map ) },
 sub { ok( length $out, 20000 ) },
 sub { ok( $out !~ /[^-]/ ) },
 
+
+##
+## Long output run through twice
+##
+## Adapted from a stress test by Aaron Elkiss <aelkiss@wam.umd.edu>
+##
+sub {
+   $h = start [$perl, qw( -pe BEGIN{$|=1}1 )], \$in, \$out;
+
+   $in = "\n";
+   $out = "";
+   pump $h until length $out;
+   ok $out eq "\n";
+},
+
+sub {
+   my $long_string = "x" x 20000 . "DOC2\n";
+   $in = $long_string;
+   $out = "";
+   my $ok_1 = eval {
+      pump $h until $out =~ /DOC2/;
+      1;
+   };
+   my $x = $@;
+   my $ok_2 = eval {
+      finish $h;
+      1;
+   };
+
+   $x = $@ if $ok_1 && ! $ok_2;
+
+   if ( $ok_1 && $ok_2 ) {
+      ok $long_string eq $out;
+   }
+   else {
+       $x =~ s/(x+)/sprintf "...%d \"x\" chars...", length $1/e;
+       ok $x, "";
+   }
+},
+
 ##
 ## child function, scalar ref I & O redirection, succinct mode.
 ##
@@ -1009,6 +1049,6 @@ sub { eok( $out,    "HeLlO WoRlD\n" ) },
 sub { eok( $err,    uc( $text ) ) },
 ) ;
 
-plan tests => scalar @tests ;
+plan tests => scalar @tests, todo => [ 69 ] ;
 
 $_->() for ( @tests ) ;

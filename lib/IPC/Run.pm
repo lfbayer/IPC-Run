@@ -6,7 +6,7 @@ package IPC::Run ;
 # License or the Artistic License, as specified in the README file.
 #
 
-$VERSION = 0.75 ;
+$VERSION = 0.77 ;
 
 =head1 NAME
 
@@ -41,17 +41,17 @@ IPC::Run - system() and background procs w/ piping, redirs, ptys (Unix, Win32)
       # $h is for "harness".
       my $h = start \@cat, \$in, \$out, \$err, timeout( 10 ) ;
 
-      $in_q .= "some input\n" ;
-      pump $h until $out_q =~ /input\n/g ;
+      $in .= "some input\n" ;
+      pump $h until $out =~ /input\n/g ;
 
-      $in_q .= "some more input\n" ;
-      pump $h until $out_q =~ /\G.*more input\n/ ;
+      $in .= "some more input\n" ;
+      pump $h until $out =~ /\G.*more input\n/ ;
 
-      $in_q .= "some final input\n" ;
+      $in .= "some final input\n" ;
       finish $h or die "cat returned $?" ;
 
-      warn $err_q if $err_q ; 
-      print $out_q ;         ## All of cat's output
+      warn $err if $err ; 
+      print $out ;         ## All of cat's output
 
    # Piping between children
       run \@cat, '|', \@gzip ;
@@ -536,12 +536,12 @@ harnesses run() in batch mode.
 It's usually wise to append new input to be sent to the child to the input
 queue, and you'll often want to zap output queues to '' before pumping.
 
-   $h = start \@cat, \$in_q ;
-   $in_q = "line 1\n" ;
+   $h = start \@cat, \$in ;
+   $in = "line 1\n" ;
    pump $h ;
-   $in_q .= "line 2\n" ;
+   $in .= "line 2\n" ;
    pump $h ;
-   $in_q .= "line 3\n" ;
+   $in .= "line 3\n" ;
    finish $h ;
 
 The final call to finish() must be there: it allows the child process(es)
@@ -781,7 +781,7 @@ If your child process will take input from file descriptors other
 than 0 (stdin), you can use a redirection operator with any of the
 valid input forms (scalar ref, sub ref, etc.):
 
-   run \@cat, '3<', \$in3_q ;
+   run \@cat, '3<', \$in3 ;
 
 When redirecting input from a scalar ref, the scalar ref is
 used as a queue.  This allows you to use &harness and pump() to
@@ -1030,7 +1030,7 @@ my @FILTERS    = qw(
 ) ;
 my @API        = qw(
    run
-   harness start pump finish
+   harness start pump pumpable finish
    signal kill_kill reap_nb
    io timer timeout
    close_terminal
@@ -1727,7 +1727,15 @@ sub harness {
    my IPC::Run $self ;
    {
       no strict 'refs' ;
-      $self = bless [ \%{"FIELDS"} ], __PACKAGE__ ;
+      ## The internal implementation of use 'fields' objects has changed
+      ## from pseudo hashes to restricted hashes in perl.
+      if ($] < 5.009) {
+         $self = bless [ \%{"FIELDS"} ], __PACKAGE__ ;
+      }
+      else {
+         $self = bless {}, __PACKAGE__ ;
+         Hash::Util::lock_keys(%$self, keys %{"FIELDS"}) ;
+      }
    }
 
    local $cur_self = $self ;
@@ -2015,10 +2023,18 @@ sub harness {
          }
 
          elsif ( ! ref $_ ) {
-            my $opt = $_ ;
-            croak "Illegal option '$_'"
-               unless grep $_ eq $opt, keys %$self ; 
-            $self->{$_} = shift @args ;
+	    if ($] < 5.009) {
+               my $opt = $_ ;
+               croak "Illegal option '$_'"
+                  unless grep $_ eq $opt, keys %$self ; 
+               $self->{$_} = shift @args ;
+	    }
+	    else {
+	       ## There's (currently) no clean way to detect whether a key
+	       ## is permissible in a restricted hash apart from trying :-)
+	       eval {$self->{$_} = shift @args} ;
+	       croak "Illegal option '$_'" if $@ ;
+	    }
          }
 
          elsif ( $_ eq 'init' ) {
@@ -3257,20 +3273,20 @@ ended prematurely" exception to be thrown.  This allows for simple scripting
 of external applications without having to add lots of error handling code at
 each step of the script:
 
-   $h = harness \@smbclient, \$in_q, \$out_q, $err_q ;
+   $h = harness \@smbclient, \$in, \$out, $err ;
 
-   $in_q = "cd /foo\n" ;
-   $h->pump until $out_q =~ /^smb.*> \Z/m ;
-   die "error cding to /foo:\n$out_q" if $out_q =~ "ERR" ;
-   $out_q = '' ;
+   $in = "cd /foo\n" ;
+   $h->pump until $out =~ /^smb.*> \Z/m ;
+   die "error cding to /foo:\n$out" if $out =~ "ERR" ;
+   $out = '' ;
 
-   $in_q = "mget *\n" ;
-   $h->pump until $out_q =~ /^smb.*> \Z/m ;
-   die "error retrieving files:\n$out_q" if $out_q =~ "ERR" ;
+   $in = "mget *\n" ;
+   $h->pump until $out =~ /^smb.*> \Z/m ;
+   die "error retrieving files:\n$out" if $out =~ "ERR" ;
 
    $h->finish ;
 
-   warn $err_q if $err_q ;
+   warn $err if $err ;
 
 =cut
 
@@ -3331,7 +3347,10 @@ sub pump_nb {
 
 Returns TRUE if calling pump() won't throw an immediate "process ended
 prematurely" exception.  This means that there are open I/O channels or
-active processes.
+active processes. May yield the parent processes' time slice for 0.01
+second if all pipes are to the child and all are paused.  In this case
+we can't tell if the child is dead, so we yield the processor and
+then attempt to reap the child in a nonblocking way.
 
 =cut
 
@@ -3341,9 +3360,31 @@ active processes.
 ## to poll for child exit.
 sub pumpable {
    my IPC::Run $self = shift ;
-   return -1 if @{$self->{PIPES}} ;
+
+   ## There's a catch-22 we can get in to if there is only one pipe left
+   ## open to the child and it's paused (ie the SCALAR it's tied to
+   ## is '').  It's paused, so we're not select()ing on it, so we don't
+   ## check it to see if the child attached to it is alive and it stays
+   ## in @{$self->{PIPES}} forever.  So, if all pipes are paused, see if
+   ## we can reap the child.
+   return -1 if grep !$_->{PAUSED}, @{$self->{PIPES}};
+
+   ## See if the child is dead.
+   $self->reap_nb;
+   return 0 unless $self->_running_kids;
+
+   ## If we reap_nb and it's not dead yet, yield to it to see if it
+   ## exits.
+   ##
+   ## A better solution would be to unpause all the pipes, but I tried that
+   ## and it never errored on linux.  Sigh.  
+   select undef, undef, undef, 0.0001;
+
+   ## try again
    $self->reap_nb ;
-   return $self->_running_kids ;
+   return 0 unless $self->_running_kids;
+
+   return -1; ## There are pipes waiting
 }
 
 
@@ -4262,11 +4303,18 @@ High resolution timeouts.
 
 =over
 
-=item Tested only on NT4.0
+=item Fails on Win9X
 
-=item Known to fail on Win95.
+If you want Win9X support, you'll have to debug it or fund me because I
+don't use that system any more.  The Win32 subsysem has been extended to
+use temporary files in simple run() invocations and these may actually
+work on Win9X too, but I don't have time to work on it.
 
-If you want Win95 support, help debug it.
+=item May deadlock on Win2K (but not WinNT4 or WinXPPro)
+
+Spawning more than one subprocess on Win2K causes a deadlock I haven't
+figured out yet, but simple uses of run() often work.  Passes all tests
+on WinXPPro and WinNT.
 
 =item no support yet for <pty< and >pty>
 

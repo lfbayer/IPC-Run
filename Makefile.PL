@@ -59,7 +59,7 @@ TOHERE
 
 WriteMakefile(
     NAME          => 'IPC::Run',
-    VERSION_FROM  => 'Run.pm',
+    VERSION_FROM  => 'lib/IPC/Run.pm',
     PREREQ_PM => {
         @conditional_prereqs,
     }

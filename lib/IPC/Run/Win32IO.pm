@@ -29,10 +29,6 @@ use IO::Handle ;
 use Socket ;
 require POSIX ;
 
-## Work around missing prototypes in old Socket.pm versions
-sub Socket::IPPROTO_TCP() ;
-sub Socket::TCP_NODELAY() ;
-
 use Socket qw( IPPROTO_TCP TCP_NODELAY ) ;
 use Symbol ;
 use Text::ParseWords ;
@@ -309,7 +305,7 @@ sub poll {
 ## closing off the ones we don't want.
 
 sub _spawn_pumper {
-   my ( $stdin, $stdout, $debug_fd, $child_label, @opts ) = @_ ;
+   my ( $stdin, $stdout, $debug_fd, $binmode, $child_label, @opts ) = @_ ;
    my ( $stdin_fd, $stdout_fd ) = ( fileno $stdin, fileno $stdout ) ;
 
    _debug "pumper stdin = ", $stdin_fd if _debugging_details;
@@ -329,6 +325,7 @@ sub _spawn_pumper {
       FdGetOsFHandle( $stdin_fd ), ## REMOVE
       FdGetOsFHandle( $stdout_fd ), ## REMOVE
       FdGetOsFHandle( $debug_fd ), ## REMOVE
+      $binmode ? 1 : 0,
       $$, $^T, _debugging_level, qq{"$child_label"},
       @opts
    ) ;
@@ -455,7 +452,9 @@ sub _open_socket_pipe {
       $self->{PUMP_SOCKET_HANDLE}
    ) = _socket $parent_handle ;
 
-   binmode $self->{PARENT_HANDLE}, $self->binmode ? ":raw" : ":crlf" or die $!;
+   ## These binmodes seem to have no effect on Win2K, but just to be safe
+   ## I do them.
+   binmode $self->{PARENT_HANDLE}      or die $!;
    binmode $self->{PUMP_SOCKET_HANDLE} or die $!;
 
 _debug "PUMP_SOCKET_HANDLE = ", fileno $self->{PUMP_SOCKET_HANDLE}
@@ -486,6 +485,11 @@ _debug "PUMP_PIPE_HANDLE = ", fileno $self->{PUMP_PIPE_HANDLE}
    if _debugging_details;
    }
 
+   ## These binmodes seem to have no effect on Win2K, but just to be safe
+   ## I do them.
+   binmode $self->{CHILD_HANDLE};
+   binmode $self->{PUMP_PIPE_HANDLE};
+
    ## No child should ever see this.
    _dont_inherit $self->{PARENT_HANDLE} ;
 
@@ -511,6 +515,7 @@ _debug "PUMP_PIPE_HANDLE = ", fileno $self->{PUMP_PIPE_HANDLE}
 	 ? ( $self->{PUMP_SOCKET_HANDLE}, $self->{PUMP_PIPE_HANDLE} )
 	 : ( $self->{PUMP_PIPE_HANDLE}, $self->{PUMP_SOCKET_HANDLE} ),
       $debug_fd,
+      $self->binmode,
       $child_fd . $self->dir . "pump" . $self->dir . $parent_fd,
    ) ;
 

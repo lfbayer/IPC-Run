@@ -315,7 +315,14 @@ sub new {
    my IPC::Run::Timer $self ;
    {
       no strict 'refs' ;
-      $self = bless [ \%{"$class\::FIELDS"} ], $class ;
+      # The internal implementation of use 'fields' objects has changed
+      # from pseudo hashes to restricted hashes in perl 5.9.0
+      if ($] < 5.009) {
+         $self = bless [ \%{"$class\::FIELDS"} ], $class ;
+      } else {
+         $self = bless {}, $class;
+         Hash::Util::lock_keys(%$self, keys %{"$class\::FIELDS"});
+      }
    }
 
    $self->{STATE} = 0 ;

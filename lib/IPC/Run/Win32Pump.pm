@@ -31,10 +31,9 @@ use Win32API::File qw(
 ) ;
 
 
-my ( $stdin_fh, $stdout_fh, $debug_fh, $parent_pid, $parent_start_time, $debug, $child_label );
+my ( $stdin_fh, $stdout_fh, $debug_fh, $binmode, $parent_pid, $parent_start_time, $debug, $child_label );
 BEGIN {
-   ( $stdin_fh, $stdout_fh, $debug_fh, $parent_pid, $parent_start_time, $debug, $child_label ) = @ARGV ;
-
+   ( $stdin_fh, $stdout_fh, $debug_fh, $binmode, $parent_pid, $parent_start_time, $debug, $child_label ) = @ARGV ;
    ## Rather than letting IPC::Run::Debug export all-0 constants
    ## when not debugging, we do it manually in order to not even
    ## load IPC::Run::Debug.
@@ -102,6 +101,7 @@ if ( _debugging_gory_details ) {
  _debug sprintf( "%5d chars revc: ", $count ), $msg ;
 }
 $total_count += $count ;
+$buf =~ s/\r//g unless $binmode;
 if ( _debugging_gory_details ) {
  my $msg = "'$buf'" ;
  substr( $msg, 100, -1 ) = '...' if length $msg > 100 ;

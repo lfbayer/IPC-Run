@@ -32,10 +32,6 @@ use IO::Handle ;
 #use IPC::Open3 ();
 require POSIX ;
 
-## Work around missing prototypes in old Socket.pm versions
-sub Socket::IPPROTO_TCP() ;
-sub Socket::TCP_NODELAY() ;
-
 use Text::ParseWords ;
 use Win32::Process ;
 use IPC::Run::Debug;
@@ -442,13 +438,9 @@ sub win32_spawn {
 
    my $process ;
    my $cmd_line = join " ", map {
-      if ( /["\s]/ ) {
-	 s/"/\\"/g ;
-	 qq{"$_"} ;
-      }
-      else {
-         $_ ;
-      }
+      ( my $s = $_ ) =~ s/"/"""/g;
+      $s = qq{"$s"} if /["\s]/;
+      $s ;
    } @$cmd ;
 
    _debug "cmd line: ", $cmd_line

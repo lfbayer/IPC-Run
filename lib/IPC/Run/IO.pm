@@ -164,7 +164,15 @@ sub _new_internal {
    my IPC::Run::IO $self ;
    {
       no strict 'refs' ;
-      $self = bless [ \%{"$class\::FIELDS"} ], $class ;
+      ## The internal implementation of use 'fields' objects has changed
+      ## from pseudo hashes to restricted hashes in perl 5.9.0
+      if ($] < 5.009) {
+         $self = bless [ \%{"$class\::FIELDS"} ], $class ;
+      }
+      else {
+         $self = bless {}, $class ;
+         Hash::Util::lock_keys(%$self, keys %{"$class\::FIELDS"}) ;
+      }
    }
 
    my ( $type, $kfd, $pty_id, $internal, $binmode, @filters ) = @_ ;
