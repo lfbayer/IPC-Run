@@ -197,4 +197,9 @@ sub { ok( map_fds, $fd_map ) },
 
 plan tests => scalar @tests ;
 
+unless ( eval { require IO::Pty1 ; } ) {
+   skip( "skip: IO::Pty not found", 0 ) for @tests ;
+   exit ;
+}
+
 $_->() for ( @tests ) ;

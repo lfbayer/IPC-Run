@@ -1,5 +1,13 @@
 Revision history for Perl extension IPC::Bashem.
 
+0.32 Thu Jun  8 06:15:17 EDT 2000
+   - Added warning about missing IO::Pty in MakeMaker.PL.  Thought about
+     making it a prerequisite, but it's not: IPC::Run can do pipes, etc,
+     if it's not found, and IO::Pty is more unix-specific than IPC::Run is.
+     What I'd really like is an 'ENABLERS' section to MakeMaker.PL that 
+     tells CPAN.pm to try to install it but not to stress if it can't.
+   - t/pty.t skips all tests if require IO::Pty fails.
+
 0.31 Tue Jun  6 01:54:59 EDT 2000
    - t/pty.t should now report what was received when checking it against
      a regex.  This is because 0.3's failing a few tests on ppc-linux
