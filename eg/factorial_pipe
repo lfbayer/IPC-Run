@@ -1,0 +1,43 @@
+#!/usr/bin/perl -w
+
+## Demonstration using a pipe() to queue input to a child process
+
+use strict ;
+
+use IPC::Run qw( run ) ;
+
+die "usage: $0 <num>\n\nwhere <num> is a positive integer\n" unless @ARGV ;
+my $i = shift ;
+die "\$i must be > 0, not '$i'" unless $i =~ /^\d+$/ && $i > 0 ;
+
+## Open a pipe to queue input to bc's stdin, and ask perl not to buffer output.
+die $! unless pipe( IN_R, IN_W ) ;
+my $tmp = select IN_W ; 
+$|= 1 ;
+select $tmp ;
+
+print IN_W "a = i = $i ; i\n" ;
+
+## Note the FALSE on failure result (opposite of system()).
+die $! unless run(
+   ['bc'],
+   \*IN_R,
+   sub {
+      my $out = shift ;
+      print "bc said: ", $out ;
+      if ( $out =~ s/.*?(\d+)\n/$1/g ) {
+         if ( $out > $i ) {
+	    ## i! is always >i for i > 0
+	    print "result = ", $out, "\n" ;
+	    close( IN_W ) ;
+	 }
+         elsif ( $out == '1' ) {
+	    ## End of calculation loop, get bc to output the result
+	    print IN_W "a\n" ;
+	 }
+	 else {
+	    print IN_W "i = i - 1 ; a = a * i ; i\n" ;
+	 }
+      }
+   },
+) ;

@@ -1,0 +1,3 @@
+CVS/.*
+\.sw[a-z]$
+Makefile

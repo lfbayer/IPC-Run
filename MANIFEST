@@ -1,0 +1,11 @@
+Makefile.PL
+Changes
+MANIFEST
+MANIFEST.SKIP
+IPC/Run.pm
+eg/factorial
+eg/factorial_pipe
+t/filter.t
+t/harness.t
+t/run.t
+t/timeout.t
