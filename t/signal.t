@@ -36,17 +36,12 @@ my @receiver = (
    $^X,
    '-e',
    <<'END_RECEIVER',
-      sub s{
-	 print $_[0], "\n";
-      }
+      my $which = "          " ;
+      sub s{ $which = $_[0] } ;
       $SIG{$_}=\&s for (qw(USR1 USR2));
       $| = 1 ;
       print "Ok\n";
-      sleep 1 ;
-      sleep 1 ;
-      sleep 1 ;
-      sleep 1 ;
-      sleep 1 ;
+      for (1..10) { sleep 1 ; print $which, "\n" }
 END_RECEIVER
 ) ;
 
@@ -73,7 +68,7 @@ skip_unless_signals {
 },
 
 skip_unless_signals {
-   $h->signal( "QUIT" ) ;
+   $h->signal( "TERM" ) ;
    finish $h ;
    ok( 1 ) ;
 },

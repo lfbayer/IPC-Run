@@ -1,5 +1,12 @@
 Revision history for Perl extension IPC::Run
 
+0.61 Fri Dec  7 05:21:28 EST 2001
+   - Fix up signal.t to not fail due to printing not working quite right in
+     signal handlers.  Spotted in the wild by Blair Zajac <blair@orcaware.com>
+
+0.6 Thu Dec  6 04:36:57 EST 2001
+   - Get binmode--(">", binary) and ("<", binary)--working on Win32
+
 0.56 Sun Dec  2 09:18:19 EST 2001
    - IPC::Run now throws exceptions from the post-fork, pre-exec child process
      back to the parent process using an additional pipe.  This pipe also

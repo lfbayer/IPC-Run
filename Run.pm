@@ -351,8 +351,7 @@ start() pauses the parent until the child executes the command or CODE
 reference and propogates any exceptions thrown (inclusing exec()
 failure) back to the parent.  This has several pleasant effects: any
 exceptions thrown in the child, including exec() failure, come flying
-out of start() (or whatever IPC::Run function calls start()) as though
-they had occured in the parent.
+out of start() or run() as though they had occured in the parent.
 
 This includes exceptions your code thrown from init subs.  In this
 example:
@@ -1007,7 +1006,7 @@ in their exit codes.
 
 =cut
 
-$VERSION = 0.6 ;
+$VERSION = 0.61 ;
 
 @ISA = qw( Exporter ) ;
 
@@ -1640,8 +1639,23 @@ Often, running C<kill -l> (that's a lower case "L") on the command line will
 list the signals present on your operating system.
 
 B<WARNING>: The signal subsystem is not at all portable.  We *may* offer
-to simulate C<TERM> and C<KILL> on some operatiing systems, submit code
+to simulate C<TERM> and C<KILL> on some operating systems, submit code
 to me if you want this.
+
+B<WARNING 2>: Up to and including perl v5.6.1, doing almost anything in a
+signal handler could be dangerous.  The most safe code avoids all
+mallocs and system calls, usually by preallocating a flag before
+entering the signal handler, altering the flag's value in the
+handler, and responding to the changed value in the main system:
+
+   my $got_usr1 = 0 ;
+   sub usr1_handler { ++$got_signal }
+
+   $SIG{USR1} = \&usr1_handler ;
+   while () { sleep 1 ; print "GOT IT" while $got_usr1-- ; }
+
+Even this approach is perilous if ++ and -- aren't atomic on your system
+(I've never heard of this on any modern CPU large enough to run perl).
 
 =cut
 
