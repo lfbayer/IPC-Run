@@ -1,5 +1,11 @@
 Revision history for Perl extension IPC::Run
 
+0.72 Thu May  9 10:25:55 EDT 2002
+   - Doc patch from daniel@danielgardner.org
+   - Backport Win32Helper to 5.00503 (compilation of this is
+     tested on Unix or it would not have been spotted,
+     not even by Matt Sergeant matts@sergeant.org).
+
 0.71 Mon May  6 09:04:18 EDT 2002
    - Fix the pesky run/t check for specific error string (test 134 at
      the moment, bad file descriptor test) that keeps tripping up

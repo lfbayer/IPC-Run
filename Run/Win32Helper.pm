@@ -336,7 +336,7 @@ LIMITATIONS: shellwords dies silently on malformed input like
 
 sub win32_parse_cmd_line {
    my $line = shift ;
-   $line =~ s{(\\[^[:punct:]])}{\\$1}g ;
+   $line =~ s{(\\[\w\s])}{\\$1}g ;
    return shellwords $line ;
 }
 

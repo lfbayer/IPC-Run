@@ -60,7 +60,7 @@ IPC::Run - system() and background procs w/ piping, redirs, ptys (Unix, Win32)
 
    # Calling \&set_up_child in the child before it executes the
    # command (only works on systems with true fork() & exec())
-   # exceptions thrown in set_up_child() will be propogated back
+   # exceptions thrown in set_up_child() will be propagated back
    # to the parent and thrown from run().
       run \@cat, \$in, \$out,
          init => \&set_up_child ;
@@ -150,7 +150,7 @@ ptys are not supported yet under Win32, but will be emulated...
 
 =item Debugging Tip
 
-You may use the environmenbt variable C<IPCRUNDEBUG> to see what's going on
+You may use the environment variable C<IPCRUNDEBUG> to see what's going on
 under the hood:
 
    $ IPCRUNDEBUG=basic   myscript     # prints minimal debugging
@@ -221,7 +221,7 @@ As shown in most of the scripting examples, the read-to-scalar facility
 for gathering subcommand's output is often used with regular expressions
 to detect stopping points.  This is because subcommand output often
 arrives in dribbles and drabs, often only a character or line at a time.
-This output is input for the mian program and piles up in variables like
+This output is input for the main program and piles up in variables like
 the C<$out> and C<$err> in our examples.
 
 Regular expressions can be used to wait for appropriate output in
@@ -285,7 +285,7 @@ preallocate memory to $out, do something like:
 C<perl> will allocate at least 10,000 characters' worth of space, then
 mark the $out as having 0 length without freeing all that yummy RAM.
 
-=head2 Timouts and Timers
+=head2 Timeouts and Timers
 
 More than likely, you don't want your subprocesses to run forever, and
 sometimes it's nice to know that they're going a little slowly.
@@ -352,13 +352,13 @@ down; they will not expire in the interval between the last valid
 process and when IPC::Run scoops up the processes' result codes, for
 instance.
 
-=head2 Spawning synchronization, child exception propogation
+=head2 Spawning synchronization, child exception propagation
 
 start() pauses the parent until the child executes the command or CODE
-reference and propogates any exceptions thrown (inclusing exec()
+reference and propagates any exceptions thrown (including exec()
 failure) back to the parent.  This has several pleasant effects: any
 exceptions thrown in the child, including exec() failure, come flying
-out of start() or run() as though they had occured in the parent.
+out of start() or run() as though they had ocurred in the parent.
 
 This includes exceptions your code thrown from init subs.  In this
 example:
@@ -376,7 +376,7 @@ In situations like
    run \@cmd1, "|", \@cmd2, "|", \@cmd3 ;
 
 @cmd1 will be initted and exec()ed before @cmd2, and @cmd2 before @cmd3.
-This can save time and prevent oddbal errors emitted by later commands
+This can save time and prevent oddball errors emitted by later commands
 when earlier commands fail to execute.  Note that IPC::Run doesn't start
 any commands unless it can find the executables referenced by all
 commands.  These executables must pass both the C<-f> and C<-x> tests
@@ -395,7 +395,7 @@ to take place before the parent writes to the child via pty.  Writes
 that occur before the pty is set up can get lost.
 
 A final, minor, nicety is that debugging output from the child will be
-emitted before the parent contues on, making for much clearer debugging
+emitted before the parent continues on, making for much clearer debugging
 output in complex situations.
 
 The only drawback I can conceive of is that the parent can't continue to
@@ -475,7 +475,7 @@ below.
 After each \@cmd (or \&foo), parsing begins in succinct mode and toggles to
 operator syntax mode when an operator (ie plain scalar, not a ref) is seen.
 Once in
-operator syntax mode, parseing only reverts to succinct mode when a '|' or
+operator syntax mode, parsing only reverts to succinct mode when a '|' or
 '&' is seen.
 
 In succinct mode, each parameter after the \@cmd specifies what to
@@ -638,7 +638,7 @@ new_chunker()).
 Different output format when not connected to a tty.
 
 Some commands alter their formats to ease machine parsability when they
-aren't connected to a pipe.  This is actually good, but can be suprising.
+aren't connected to a pipe.  This is actually good, but can be surprising.
 
 =back
 
@@ -682,7 +682,7 @@ once for each character.
 =item '>pty>' means '&>pty>', not '1>pty>'
 
 The pseudo terminal redirects both stdout and stderr unless you specify
-a file desciptor.  If you want to grab stderr separately, do this:
+a file descriptor.  If you want to grab stderr separately, do this:
 
    start \@cmd, '<pty<', \$in, '>pty>', \$out, '2>', \$err ;
 
@@ -719,7 +719,7 @@ will be fixed.  Until it is, it's best not to mix-and-match children.
    <pipe, N<pipe     P   Pipe opens H for caller to read, write, close.
    >pipe, N>pipe     P   Pipe opens H for caller to read, write, close.
                       
-'N' and 'M' are placehodlers for integer file descriptor numbers.  The
+'N' and 'M' are placeholders for integer file descriptor numbers.  The
 terms 'input' and 'output' are from the child process's perspective.
 
 The SHNP field indicates what parameters an operator can take:
@@ -879,17 +879,17 @@ use select() on it.
 
 =item Duplicating output descriptors: >&m, n>&m
 
-This duplicates output descriptor number n (default is 1 if n is ommitted)
+This duplicates output descriptor number n (default is 1 if n is omitted)
 from descriptor number m.
 
 =item Duplicating input descriptors: <&m, n<&m
 
-This duplicates input descriptor number n (default is 0 if n is ommitted)
+This duplicates input descriptor number n (default is 0 if n is omitted)
 from descriptor number m
 
 =item Closing descriptors: <&-, 3<&-
 
-This closes descriptor number n (default is 0 if n is ommitted).  The
+This closes descriptor number n (default is 0 if n is omitted).  The
 following commands are equivalent:
 
    run \@cmd, \undef ;
@@ -935,7 +935,7 @@ syntax:
 This capability is not provided for IO handles or named files.
 
 Two filters are provided by IPC::Run: appender and chunker.  Because
-these may take an argument, you need to use the constructor fuinctions
+these may take an argument, you need to use the constructor functions
 new_appender() and new_chunker() rather than using \& syntax:
 
    run(
@@ -1013,7 +1013,7 @@ in their exit codes.
 
 =cut
 
-$VERSION = 0.71 ;
+$VERSION = 0.72 ;
 
 @ISA = qw( Exporter ) ;
 

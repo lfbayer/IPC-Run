@@ -11,6 +11,16 @@ use strict ;
 use Test ;
 
 BEGIN {
+   unless ( eval "require 5.6.0" ) {
+       ## NOTE: I'm working around this here because I don't want this
+       ## test to fail on non-Win32 systems with older Perls.  Makefile.PL
+       ## does the require 5.6.0 to protect folks on Windows.
+       plan tests => 1;
+       skip "perl5.00503's Socket.pm does not export IPPROTO_TCP", 1, 1;
+       exit 0;
+   }
+
+
    $INC{$_} = 1 for qw( Win32/Process.pm Win32API/File.pm ) ;
 
    package Win32API::File ;
