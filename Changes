@@ -1,5 +1,12 @@
 Revision history for Perl extension IPC::Run
 
+0.56 Sun Dec  2 09:18:19 EST 2001
+   - IPC::Run now throws exceptions from the post-fork, pre-exec child process
+     back to the parent process using an additional pipe.  This pipe also
+     is used to pause the parent until the child performs the exec(), so
+     that (when a new version of IO::Pty implements it) pty creation can
+     be completed before the parent tries to write to it.
+
 0.55 Sat Dec  1 17:15:02 EST 2001
    - Fixups to Win32 code to get it compiling ok (added t/win32_compile.t
      to ensure that Win32Helper.pm at least compiles Ok).

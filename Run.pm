@@ -60,6 +60,8 @@ IPC::Run - Run subprocesses w/ piping, redirection, and pseudo-ttys
 
    # Calling \&set_up_child in the child before it executes the
    # command (only works on systems with true fork() & exec())
+   # exceptions thrown in set_up_child() will be propogated back
+   # to the parent and thrown from run().
       run \@cat, \$in, \$out,
          init => \&set_up_child ;
 
@@ -343,6 +345,61 @@ Timeouts and timers are I<not> checked once the subprocesses are shut down;
 they will not expire in the interval between the last valid process and when
 IPC::Run scoops up the processes' result codes, for instance.
 
+=head2 Spawning synchronization, child exception propogation
+
+start() pauses the parent until the child executes the command or CODE
+reference and propogates any exceptions thrown (inclusing exec()
+failure) back to the parent.  This has several pleasant effects: any
+exceptions thrown in the child, including exec() failure, come flying
+out of start() (or whatever IPC::Run function calls start()) as though
+they had occured in the parent.
+
+This includes exceptions your code thrown from init subs.  In this
+example:
+
+   eval {
+      run \@cmd, init => sub { die "blast it! foiled again!" } ;
+   } ;
+   print $@ ;
+
+the exception "blast it! foiled again" will be thrown from the child
+process (preventing the exec()) and printed by the parent.
+
+In situations like
+
+   run \@cmd1, "|", \@cmd2, "|", \@cmd3 ;
+
+@cmd1 will be initted and exec()ed before @cmd2, and @cmd2 before @cmd3.
+This can save time and prevent oddbal errors emitted by later commands
+when earlier commands fail to execute.  Note that IPC::Run doesn't start
+any commands unless it can find the executables referenced by all
+commands.  These executables must pass both the C<-f> and C<-x> tests
+described in L<perlfunc>.
+
+Another nice effect is that init() subs can take their time doing things
+and there will be no problems caused by a parent continuing to execute
+before a child's init() routine is complete.  Say the init() routine
+needs to open a socket or a temp file that the parent wants to connect
+to; without this synchronization, the parent will need to implement a
+retry loop to wait for the child to run, since often, the parent gets a
+lot of things done before the child's first timeslice is allocated.
+
+This is also quite necessary for pseudo-tty initialization, which needs
+to take place before the parent writes to the child via pty.  Writes
+that occur before the pty is set up can get lost.
+
+A final, minor, nicety is that debugging output from the child will be
+emitted before the parent contues on, making for much clearer debugging
+output in complex situations.
+
+The only drawback I can conceive of is that the parent can't continue to
+operate while the child is being initted.  If this ever becomes a
+problem in the field, we can implement an option to avoid this behavior,
+but I don't expect it to.
+
+B<Win32>: executing CODE references isn't supported on Win32, see
+L</Win32 LIMITATIONS> for details.
+
 =head2 Syntax
 
 run(), start(), and harness() can all take a harness specification
@@ -352,10 +409,9 @@ to the systems' shell:
    run "echo 'hi there'" ;
 
 or a list of commands, io operations, and/or timers/timeouts to execute.
-Consecutive commands must be separated by a pipe operator '|' or an
-'&'.  External commands are
-passed in as array references, and, on systems supporting fork(),
-Perl code may be passed in as subs:
+Consecutive commands must be separated by a pipe operator '|' or an '&'.
+External commands are passed in as array references, and, on systems
+supporting fork(), Perl code may be passed in as subs:
 
    run \@cmd ;
    run \@cmd1, '|', \@cmd2 ;
@@ -425,11 +481,13 @@ skipped, though this may change since it's not as DWIMerly as it
 could be.  Only stdin is assumed to be an
 input in succinct mode, all others are assumed to be outputs.
 
-If no piping or redirection is specified for a child, it will
-inherit the parent's open file descriptors as dictated by your
-system's close-on-exec behavior and the $^F flag, except that
-processes after a '&' will not inherit the parent's stdin.  Such
-processes will have their stdin closed unless it has been redirected-to.
+If no piping or redirection is specified for a child, it will inherit
+the parent's open file handles as dictated by your system's
+close-on-exec behavior and the $^F flag, except that processes after a
+'&' will not inherit the parent's stdin. Also note that $^F does not
+affect file desciptors obtained via POSIX, since it only applies to
+full-fledged Perl file handles.  Such processes will have their stdin
+closed unless it has been redirected-to.
 
 If you want to close a child processes stdin, you may do any of:
 
@@ -594,28 +652,30 @@ differences to watch out for.
 
 =item Echoing
 
-Sending to stdin will cause an echo on stdout, which occurs before each line
-is passed to the child program.  There is currently no way to disable this.
+Sending to stdin will cause an echo on stdout, which occurs before each
+line is passed to the child program.  There is currently no way to
+disable this, although the child process can and should disable it for
+things like passwords.
 
 =item Shutdown
 
-IPC::Run cannot close a pty until all output has been collected.  This means
-that it is not possible to send an EOF to stdin by half-closing the pty, as
-we can when using a pipe to stdin.
+IPC::Run cannot close a pty until all output has been collected.  This
+means that it is not possible to send an EOF to stdin by half-closing
+the pty, as we can when using a pipe to stdin.
 
-This means that you need to send the
-child process an exit command or signal, or run() / finish() will time out.
-Be careful not to expect a prompt after sending the exit command.
+This means that you need to send the child process an exit command or
+signal, or run() / finish() will time out.  Be careful not to expect a
+prompt after sending the exit command.
 
 =item Command line editing
 
-Some subprocesses, notable shells that depend on the user's prompt settings,
-will reissue the prompt plus the command line input so far once for each
-character.
+Some subprocesses, notable shells that depend on the user's prompt
+settings, will reissue the prompt plus the command line input so far
+once for each character.
 
 =item '>pty>' means '&>pty>', not '1>pty>'
 
-The pseudo terminal redirects both stdin and stdout unless you specify
+The pseudo terminal redirects both stdout and stderr unless you specify
 a file desciptor.  If you want to grab stderr separately, do this:
 
    start \@cmd, '<pty<', \$in, '>pty>', \$out, '2>', \$err ;
@@ -627,10 +687,9 @@ and stderr completely closed before any redirection operators take
 effect.  This casts of the bonds of the controlling terminal.  This is
 not done when using pipes.
 
-Right now, this affects all children in a harness that has a pty in
-use, even if that pty would not affect a particular child.  That's a bug
-and will be fixed.  Until it is, it's best not to mix-and-match
-children.
+Right now, this affects all children in a harness that has a pty in use,
+even if that pty would not affect a particular child.  That's a bug and
+will be fixed.  Until it is, it's best not to mix-and-match children.
 
 =back
 
@@ -948,7 +1007,7 @@ in their exit codes.
 
 =cut
 
-$VERSION=0.55 ;
+$VERSION=0.56 ;
 
 @ISA = qw( Exporter ) ;
 
@@ -1031,6 +1090,8 @@ use fields (
                    # by _cleanup() to handle I/O to/from handles.
 
    'DEBUG_FD',     # Debugging FD dup()ed from STDOUT.
+   'SYNC_WRITER_FD', # write end of pipe used to sync w/ child and report
+                   # exec errors from child.
 
    # Bit vectors for select()
    'RIN',
@@ -1056,8 +1117,9 @@ use fields (
 #   'timeout',
 
    # Testing flags, passed in from t/*.t
-   '_simulate_fork_failure',
    '_simulate_open_failure',
+   '_simulate_fork_failure',
+   '_simulate_exec_failure',
 ) ;
 
 sub input_avail() ;
@@ -1371,7 +1433,7 @@ sub _exec {
 #   exec @_ or croak "$!: exec( " . join( ', ', @_ ) . " )" ;
    _debug 'exec()ing ', join " ", map "'$_'", @_ if _debugging_details ;
 
-   {
+#   {
 ## Commented out since we don't call this on Win32.
 #      # This works around the bug where 5.6.1 complains
 #      # "Can't exec ...: No error" after an exec on NT, where
@@ -1385,8 +1447,9 @@ sub _exec {
 #      # messages to appear in the "Can't exec" message
 #      undef $! ;
       exec @_ ;
-   }
-   croak "$!: exec( " . join( ', ', map "'$_'", @_ ) . " )" ;
+#   }
+#   croak "$!: exec( " . join( ', ', map "'$_'", @_ ) . " )" ;
+    ## Fall through so $! can be reported to parent.
 }
 
 
@@ -1453,10 +1516,55 @@ sub _pty {
 sub _read {
    confess 'undef' unless defined $_[0] ;
    my $s  = '' ;
-   my $r = POSIX::read( $_[0], $s, 100000 ) ;
+   my $r = POSIX::read( $_[0], $s, 10_000 ) ;
    croak "$!: read( $_[0] )" unless $r ;
    _debug "read( $_[0] ) = $r chars '$s'" if _debugging_data ;
    return $s ;
+}
+
+
+## A METHOD, not a function.
+sub _spawn {
+   my IPC::Run $self = shift ;
+   my ( $kid ) = @_ ;
+
+   _debug "opening sync pipe ", $kid->{PID} if _debugging_details ;
+   my $sync_reader_fd ;
+   ( $sync_reader_fd, $self->{SYNC_WRITER_FD} ) = _pipe ;
+   $kid->{PID} = fork() ;
+   croak "$! during fork" unless defined $kid->{PID} ;
+
+   unless ( $kid->{PID} ) {
+      _close $sync_reader_fd ;
+      $self->_do_kid_and_exit( $kid ) ;
+   }
+   _debug "fork() = ", $kid->{PID} if _debugging_details ;
+
+   ## Wait for kid to get to it's exec() and see if it fails.
+   _close $self->{SYNC_WRITER_FD} ;
+   my $sync_pulse = _read $sync_reader_fd ;
+   _close $sync_reader_fd ;
+
+   if ( ! defined $sync_pulse || length $sync_pulse ) {
+      if ( waitpid( $kid->{PID}, 0 ) >= 0 ) {
+	 $kid->{RESULT} = $? ;
+      }
+      else {
+	 $kid->{RESULT} = -1 ;
+      }
+      $sync_pulse =
+         "error reading synchronization pipe for $kid->{NUM}, pid $kid->{PID}"
+	 unless length $sync_pulse ;
+      croak $sync_pulse ;
+   }
+   return $kid->{PID} ;
+
+## Wait for pty to get set up.  This is a hack until we get synchronous
+## selects.
+if ( keys %{$self->{PTYS}} && $IO::Pty::VERSION < 0.9 ) {
+_debug "sleeping to give pty a chance to init, will fix when newer IO::Pty arrives." ;
+sleep 1 ;
+}
 }
 
 
@@ -1749,7 +1857,7 @@ sub harness {
                ? ref $_ eq 'ARRAY'
                   ? ( '[ ', join( ', ', map "'$_'", @$_ ), ' ]' )
                   : ( ref $_
-                     || ( length $_ < 10
+                     || ( length $_ < 50
                            ? "'$_'"
                            : join( '', "'", substr( $_, 0, 10 ), "...'" )
                         )
@@ -2524,113 +2632,149 @@ sub _do_kid_and_exit {
    my IPC::Run $self = shift ;
    my ( $kid ) = @_ ;
 
-   local $cur_self = $self ;
+   ## For unknown reasons, placing these two statements in the eval{}
+   ## causes the eval {} to not catch errors after they are executed in
+   ## perl 5.6.0, godforsaken version that it is...not sure about 5.6.1.
+   ## Part of this could be that these symbols get destructed when
+   ## exiting the eval, and that destruction might be what's (wrongly)
+   ## confusing the eval{}, allowing the exception to probpogate.
+   my $s1 = gensym ;
+   my $s2 = gensym ;
 
-   $debug_name = ref $kid->{VAL} eq "CODE"
-      ? "CODE"
-      : basename( $kid->{VAL}->[0] ) ;
+   eval {
+      local $cur_self = $self ;
 
-   ## close parent FD's first so they're out of the way.
-   ## Don't close STDIN, STDOUT, STDERR: they should be inherited or
-   ## overwritten below.
-   my @needed = ( 1, 1, 1 ) ;
+      $debug_name = ref $kid->{VAL} eq "CODE"
+	 ? "CODE"
+	 : basename( $kid->{VAL}->[0] ) ;
 
-   for ( @{$kid->{OPS}} ) {
-      $needed[ $_->{TFD} ] = 1 if defined $_->{TFD} ;
-   }
+      ## close parent FD's first so they're out of the way.
+      ## Don't close STDIN, STDOUT, STDERR: they should be inherited or
+      ## overwritten below.
+      my @needed = ( 1, 1, 1 ) ;
 
-   my @closed ;
-   if ( %{$self->{PTYS}} ) {
-      ## Clean up the parent's fds.
-      for ( keys %{$self->{PTYS}} ) {
-         _debug "Cleaning up parent's ptty '$_'" if _debugging_details ;
-         my $slave = $self->{PTYS}->{$_}->slave ;
-         $closed[ $self->{PTYS}->{$_}->fileno ] = 1 ;
-         close $self->{PTYS}->{$_} ;
-         $self->{PTYS}->{$_} = $slave ;
+      for ( @{$kid->{OPS}} ) {
+	 $needed[ $_->{TFD} ] = 1 if defined $_->{TFD} ;
       }
 
-      close_terminal ;
-      $closed[ $_ ] = 1 for ( 0..2 ) ;
+      ## TODO: use the forthcoming IO::Pty to close the terminal and
+      ## make the first pty for this child the controlling terminal.
+      ## This will also make it so that pty-laden kids don't cause
+      ## other kids to lose stdin/stdout/stderr.
+      my @closed ;
+      if ( %{$self->{PTYS}} ) {
+	 ## Clean up the parent's fds.
+	 for ( keys %{$self->{PTYS}} ) {
+	    _debug "Cleaning up parent's ptty '$_'" if _debugging_details ;
+	    my $slave = $self->{PTYS}->{$_}->slave ;
+	    $closed[ $self->{PTYS}->{$_}->fileno ] = 1 ;
+	    close $self->{PTYS}->{$_} ;
+	    $self->{PTYS}->{$_} = $slave ;
+	 }
+
+	 close_terminal ;
+	 $closed[ $_ ] = 1 for ( 0..2 ) ;
+      }
+
+      for my $sibling ( @{$self->{KIDS}} ) {
+	 for ( @{$sibling->{OPS}} ) {
+	    if ( $_->{TYPE} =~ /^.pty.$/ ) {
+	       $_->{TFD} = $self->{PTYS}->{$_->{PTY_ID}}->fileno ;
+	       $needed[$_->{TFD}] = 1 ;
+	    }
+
+	    for ( $_->{FD}, ( $sibling != $kid ? $_->{TFD} : () ) ) {
+	       if ( defined $_ && ! $closed[$_] && ! $needed[$_] ) {
+		  _close( $_ ) ;
+		  $closed[$_] = 1 ;
+		  $_ = undef ;
+	       }
+	    }
+	 }
+      }
+
+      my @lazy_close ;
+      for ( @{$kid->{OPS}} ) {
+	 if ( defined $_->{TFD} ) {
+	    unless ( $_->{TFD} == $_->{KFD} ) {
+	       $self->_dup2_gently( $kid->{OPS}, $_->{TFD}, $_->{KFD} ) ;
+	       push @lazy_close, $_->{TFD} ;
+	    }
+	 }
+	 elsif ( $_->{TYPE} eq 'dup' ) {
+	    $self->_dup2_gently( $kid->{OPS}, $_->{KFD1}, $_->{KFD2} )
+	       unless $_->{KFD1} == $_->{KFD2} ;
+	 }
+	 elsif ( $_->{TYPE} eq 'close' ) {
+	    for ( $_->{KFD} ) {
+	       if ( ! $closed[$_] ) {
+		  _close( $_ ) ;
+		  $closed[$_] = 1 ;
+		  $_ = undef ;
+	       }
+	    }
+	 }
+	 elsif ( $_->{TYPE} eq 'init' ) {
+	    $_->{SUB}->() ;
+	 }
+      }
+
+      for ( @lazy_close ) {
+	 unless ( $closed[$_] ) {
+	    _close( $_ ) ;
+	    $closed[$_] = 1 ;
+	 }
+      }
+
+      if ( ref $kid->{VAL} ne 'CODE' ) {
+	 open $s1, ">&=$self->{SYNC_WRITER_FD}"
+	    or croak "$! setting filehandle to fd SYNC_WRITER_FD" ;
+	 fcntl $s1, F_SETFD, 1 ;
+
+	 if ( defined $self->{DEBUG_FD} ) {
+	    open $s2, ">&=$self->{DEBUG_FD}"
+	       or croak "$! setting filehandle to fd DEBUG_FD" ;
+	    fcntl $s2, F_SETFD, 1 ;
+	 }
+
+	 my @cmd = ( $kid->{PATH}, @{$kid->{VAL}}[1..$#{$kid->{VAL}}] ) ;
+	 _debug 'execing ', join " ", map { /[\s"]/ ? "'$_'" : $_ } @cmd
+	    if _debugging ;
+
+	 die "exec failed: simulating exec() failure"
+	    if $self->{_simulate_exec_failure} ;
+
+	 _exec $kid->{PATH}, @{$kid->{VAL}}[1..$#{$kid->{VAL}}] ;
+
+	 croak "exec failed: $!" ;
+      }
+   } ;
+   if ( $@ ) {
+      _write $self->{SYNC_WRITER_FD}, $@ ;
+      ## Avoid DESTROY.
+      POSIX::exit 1  ;
    }
 
-   for my $sibling ( @{$self->{KIDS}} ) {
-      for ( @{$sibling->{OPS}} ) {
-         if ( $_->{TYPE} =~ /^.pty.$/ ) {
-            $_->{TFD} = $self->{PTYS}->{$_->{PTY_ID}}->fileno ;
-            $needed[$_->{TFD}] = 1 ;
-         }
+   ## We must be executing code in the child, otherwise exec() would have
+   ## prevented us from being here.
+   _close $self->{SYNC_WRITER_FD} ;
+   _debug 'calling fork()ed CODE ref' ;
+   POSIX::close $self->{DEBUG_FD}      if defined $self->{DEBUG_FD} ;
+   ## TODO: Overload CORE::GLOBAL::exit...
+   $kid->{VAL}->() ;
 
-         for ( $_->{FD}, ( $sibling != $kid ? $_->{TFD} : () ) ) {
-            if ( defined $_ && ! $closed[$_] && ! $needed[$_] ) {
-               _close( $_ ) ;
-               $closed[$_] = 1 ;
-               $_ = undef ;
-            }
-         }
-      }
-   }
+   ## There are bugs in perl closures up to and including 5.6.1
+   ## that may keep this next line from having any effect, and it
+   ## won't have any effect if our caller has kept a copy of it, but
+   ## this may cause the closure to be cleaned up.  Maybe.
+   $kid->{VAL} = undef ;
 
-   my @lazy_close ;
-   for ( @{$kid->{OPS}} ) {
-      if ( defined $_->{TFD} ) {
-         unless ( $_->{TFD} == $_->{KFD} ) {
-            $self->_dup2_gently( $kid->{OPS}, $_->{TFD}, $_->{KFD} ) ;
-            push @lazy_close, $_->{TFD} ;
-         }
-      }
-      elsif ( $_->{TYPE} eq 'dup' ) {
-         $self->_dup2_gently( $kid->{OPS}, $_->{KFD1}, $_->{KFD2} )
-            unless $_->{KFD1} == $_->{KFD2} ;
-      }
-      elsif ( $_->{TYPE} eq 'close' ) {
-         for ( $_->{KFD} ) {
-            if ( ! $closed[$_] ) {
-               _close( $_ ) ;
-               $closed[$_] = 1 ;
-               $_ = undef ;
-            }
-         }
-      }
-      elsif ( $_->{TYPE} eq 'init' ) {
-         $_->{SUB}->() ;
-      }
-   }
-
-   for ( @lazy_close ) {
-      unless ( $closed[$_] ) {
-         _close( $_ ) ;
-         $closed[$_] = 1 ;
-      }
-   }
-
-   if ( ref $kid->{VAL} eq 'CODE' ) {
-      _debug 'calling fork()ed CODE ref' ;
-      POSIX::close( $self->{DEBUG_FD} ) if defined $self->{DEBUG_FD} ;
-      ## TODO: Overload CORE::GLOBAL::exit...
-      $kid->{VAL}->() ;
-
-      ## There are bugs in perl closures up to and including 5.6.1
-      ## that may keep this next line from having any effect, and it
-      ## won't have any effect if our caller has kept a copy of it, but
-      ## this may cause the closure to be cleaned up.  Maybe.
-      $kid->{VAL} = undef ;
-
-      ## Use POSIX::exit to avoid global destruction, since this might
-      ## cause DESTROY() to be called on objects created in the parent
-      ## and thus cause double cleanup.  For instance, if DESTROY() unlinks
-      ## a file in the child, we don't want the parent to suddenly miss
-      ## it.
-      POSIX::exit 0 ;
-   }
-   else {
-      my @cmd = ( $kid->{PATH}, @{$kid->{VAL}}[1..$#{$kid->{VAL}}] ) ;
-      _debug 'execing ', join " ", map { /[\s"]/ ? "'$_'" : $_ } @cmd
-         if _debugging ;
-      POSIX::close( $self->{DEBUG_FD} ) if defined $self->{DEBUG_FD} ;
-      _exec( $kid->{PATH}, @{$kid->{VAL}}[1..$#{$kid->{VAL}}] ) ;
-      croak "exec of $kid->{PATH} failed $!" ;
-   }
+   ## Use POSIX::exit to avoid global destruction, since this might
+   ## cause DESTROY() to be called on objects created in the parent
+   ## and thus cause double cleanup.  For instance, if DESTROY() unlinks
+   ## a file in the child, we don't want the parent to suddenly miss
+   ## it.
+   POSIX::exit 0 ;
 }
 
 
@@ -2749,16 +2893,7 @@ sub start {
             croak "simulated failure of fork"
                if $self->{_simulate_fork_failure} ;
             unless ( $^O =~ /^(?:os2|MSWin32)$/ ) {
-               $kid->{PID} = fork() ;
-               croak "$! during fork" unless defined $kid->{PID} ;
-               $self->_do_kid_and_exit( $kid ) unless $kid->{PID} ;
-               _debug "fork() = ", $kid->{PID} if _debugging_details ;
-## Wait for pty to get set up.  This is a hack until we get synchronous
-## selects.
-if ( keys %{$self->{PTYS}} && $IO::Pty::VERSION < 0.9 ) {
-   _debug "sleeping to give pty a chance to init, will fix when newer IO::Pty arrives." ;
-   sleep 1 ;
-}
+	       $self->_spawn( $kid ) ;
             }
             else {
 ## TODO: Test and debug spawing code.  Someday.
@@ -2779,7 +2914,6 @@ if ( keys %{$self->{PTYS}} && $IO::Pty::VERSION < 0.9 ) {
 		  IPC::Run::Win32Helper::win32_spawn( 
 		     [ $kid->{PATH}, @{$kid->{VAL}}[1..$#{$kid->{VAL}}] ],
 		     $kid->{OPS},
-#		     $self->{PIPES} 
 		  ) ;
                _debug "spawn() = ", $kid->{PID} ;
             }
@@ -4133,6 +4267,10 @@ High resolution timeouts.
 
 =item Tested only on NT4.0
 
+=item Known to fail on Win95.
+
+If you want Win95 support, help debug it.
+
 =item no support yet for <pty< and >pty>
 
 These are likely to be implemented as "<" and ">" with binmode on, not
@@ -4149,9 +4287,11 @@ Perl file handles from Win32 file handles).
 =item no support for subroutine subprocesses (CODE refs)
 
 Can't fork(), so the subroutines would have no context, and closures certainly
-have no meaning.  Perhaps with Win32 fork() emulation, this can be supported in
-a limited fashion, but there are other very serious problems with that: all
-parent fds get dup()ed in to the thread emulating the forked process, and that
+have no meaning
+
+Perhaps with Win32 fork() emulation, this can be supported in a limited
+fashion, but there are other very serious problems with that: all parent
+fds get dup()ed in to the thread emulating the forked process, and that
 keeps the parent from being able to close all of the appropriate fds.
 
 =item no support for init => sub {} routines.
