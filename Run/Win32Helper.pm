@@ -92,7 +92,7 @@ sub _inherit {       #### REMOVE
 =item optimize()
 
 Most common incantations of C<run()> (I<not> C<harness()>, C<start()>,
-or C<finish()) now use temporary files to redirect input and output
+or C<finish()>) now use temporary files to redirect input and output
 instead of pumper processes.
 
 Temporary files are used when sending to child processes if input is

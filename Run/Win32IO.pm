@@ -541,8 +541,6 @@ sub _do_open {
    }
 }
 
-=back
-
 =head1 AUTHOR
 
 Barries Slaymaker <barries@slaysys.com>.  Funded by Perforce Software, Inc.

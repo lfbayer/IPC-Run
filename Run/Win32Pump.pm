@@ -4,6 +4,10 @@ package IPC::Run::Win32Pump;
 
 IPC::Run::Win32Pumper - helper processes to shovel data to/from parent, child
 
+=head1 SYNOPSIS
+
+Internal use only; see IPC::Run::Win32IO and best of luck to you.
+
 =head1 DESCRIPTION
 
 See L<IPC::Run::Win32Helper|IPC::Run::Win32Helper> for details.  This
@@ -142,8 +146,6 @@ _debug "Exiting, transferred $total_count chars" if _debugging_details ;
 ##
 close STDOUT ;
 close STDERR ;
-
-=back
 
 =head1 AUTHOR
 

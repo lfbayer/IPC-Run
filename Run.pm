@@ -153,11 +153,11 @@ ptys are not supported yet under Win32, but will be emulated...
 You may use the environmenbt variable C<IPCRUNDEBUG> to see what's going on
 under the hood:
 
-   $ IPCRUNDEBUG=1 myscript     # prints minimal debugging
-   $ IPCRUNDEBUG=2 myscript     # prints all data reads/writes
-   $ IPCRUNDEBUG=3 myscript     # prints lots of low-level details
-   $ IPCRUNDEBUG=4 myscript     # (Win32 only) prints data moving through
-                                # the helper processes.
+   $ IPCRUNDEBUG=basic   myscript     # prints minimal debugging
+   $ IPCRUNDEBUG=data    myscript     # prints all data reads/writes
+   $ IPCRUNDEBUG=details myscript     # prints lots of low-level details
+   $ IPCRUNDEBUG=gory    myscript     # (Win32 only) prints data moving through
+                                      # the helper processes.
 
 =back
 
@@ -165,19 +165,19 @@ We now return you to your regularly scheduled documentation.
 
 =head2 Harnesses
 
-Child processes and I/O handles are gathered in to a harness, then started and
-run until the processing is finished or aborted.
+Child processes and I/O handles are gathered in to a harness, then
+started and run until the processing is finished or aborted.
 
 =head2 run() vs. start(); pump(); finish();
 
-There are two modes you can run harnesses in: run() functions as an enhanced
-system(), and start()/pump()/finish() allow for background processes and
-scripted interactions with them.
+There are two modes you can run harnesses in: run() functions as an
+enhanced system(), and start()/pump()/finish() allow for background
+processes and scripted interactions with them.
 
-When using run(), all data to be sent to the harness is set up in advance
-(though one can feed subprocesses input from subroutine refs to get around this
-limitation). The harness is run and all output is collected from it, then any
-child processes are waited for:
+When using run(), all data to be sent to the harness is set up in
+advance (though one can feed subprocesses input from subroutine refs to
+get around this limitation). The harness is run and all output is
+collected from it, then any child processes are waited for:
 
    run \@cmd, \<<IN, \$out ;
    blah
@@ -190,10 +190,11 @@ child processes are waited for:
 
    run $h ;
 
-The background and scripting API is provided by start(), pump(), and finish():
-start() creates a harness if need be (by calling harness()) and launches any
-subprocesses, pump() allows you to poll them for activity, and finish() then
-monitors the harnessed activities until they complete.
+The background and scripting API is provided by start(), pump(), and
+finish(): start() creates a harness if need be (by calling harness())
+and launches any subprocesses, pump() allows you to poll them for
+activity, and finish() then monitors the harnessed activities until they
+complete.
 
    ## Build the harness, open all pipes, and launch the subprocesses
    my $h = start \@cat, \$in, \$out ;
@@ -209,23 +210,24 @@ monitors the harnessed activities until they complete.
    ## Clean up
    finish $h or die "cat returned $?" ;
 
-You can optionally compile the harness with harness() prior to start()ing or
-run()ing, and you may omit start() between harness() and pump().  You might
-want to do these things if you compile your harnesses ahead of time.
+You can optionally compile the harness with harness() prior to
+start()ing or run()ing, and you may omit start() between harness() and
+pump().  You might want to do these things if you compile your harnesses
+ahead of time.
 
 =head2 Using regexps to match output
 
-As shown in most of the scripting examples, the read-to-scalar facility for
-gathering subcommand's output is often used with regular expressions to detect
-stopping points.  This is because subcommand output often arrives in dribbles
-and drabs, often only a character or line at a time.  This output is input for
-the mian program and piles up in variables like the C<$out> and C<$err> in our
-examples.
+As shown in most of the scripting examples, the read-to-scalar facility
+for gathering subcommand's output is often used with regular expressions
+to detect stopping points.  This is because subcommand output often
+arrives in dribbles and drabs, often only a character or line at a time.
+This output is input for the mian program and piles up in variables like
+the C<$out> and C<$err> in our examples.
 
-Regular expressions can be used to wait for appropriate output in several ways.
-The C<cat> example in the previous section demonstrates how to pump() until
-some string appears in the output.  Here's an example that uses C<smb> to fetch
-files from a remote server:
+Regular expressions can be used to wait for appropriate output in
+several ways.  The C<cat> example in the previous section demonstrates
+how to pump() until some string appears in the output.  Here's an
+example that uses C<smb> to fetch files from a remote server:
 
    $h = harness \@smbclient, \$in, \$out ;
 
@@ -241,18 +243,20 @@ files from a remote server:
    $in = "quit\n" ;
    $h->finish ;
 
-Notice that we carefully clear $out after the first command/response cycle?
-That's because IPC::Run does not delete $out when we continue, and we don't
-want to trip over the old output in the second command/response cycle.
+Notice that we carefully clear $out after the first command/response
+cycle? That's because IPC::Run does not delete $out when we continue,
+and we don't want to trip over the old output in the second
+command/response cycle.
 
-Say you want to accumulate all the output in $out and analyze it afterwards.
-Perl offers incremental regular expression matching using the C<m//gc> and
-pattern matching idiom and the C<\G> assertion. IPC::Run is careful not to
-disturb the current C<pos()> value for scalars it appends data to, so we could
-modify the above so as not to destroy $out by adding a couple of C</gc>
-modifiers.  The C</g> keeps us from tripping over the previous prompt and the
-C</c> keeps us from resetting the prior match position if the expected prompt
-doesn't materialize immediately:
+Say you want to accumulate all the output in $out and analyze it
+afterwards.  Perl offers incremental regular expression matching using
+the C<m//gc> and pattern matching idiom and the C<\G> assertion.
+IPC::Run is careful not to disturb the current C<pos()> value for
+scalars it appends data to, so we could modify the above so as not to
+destroy $out by adding a couple of C</gc> modifiers.  The C</g> keeps us
+from tripping over the previous prompt and the C</c> keeps us from
+resetting the prior match position if the expected prompt doesn't
+materialize immediately:
 
    $h = harness \@smbclient, \$in, \$out ;
 
@@ -269,50 +273,52 @@ doesn't materialize immediately:
 
    analyze( $out ) ;
 
-When using this technique, you may want to preallocate $out to have plenty of
-memory or you may find that the act of growing $out each time new input arrives
-causes an O(length($out)^2) slowdown as $out grows.  Say we expect no more than
-10,000 characters of input at the most.  To preallocate memory to $out, do
-something like:
+When using this technique, you may want to preallocate $out to have
+plenty of memory or you may find that the act of growing $out each time
+new input arrives causes an C<O(length($out)^2)> slowdown as $out grows.
+Say we expect no more than 10,000 characters of input at the most.  To
+preallocate memory to $out, do something like:
 
    my $out = "x" x 10_000 ;
    $out = "" ;
 
-C<perl> will allocate at least 10,000 characters' worth of space, then mark the
-$out as having 0 length without freeing all that yummy RAM.
+C<perl> will allocate at least 10,000 characters' worth of space, then
+mark the $out as having 0 length without freeing all that yummy RAM.
 
 =head2 Timouts and Timers
 
 More than likely, you don't want your subprocesses to run forever, and
-sometimes it's nice to know that they're going a little slowly.  Timeouts throw
-exceptions after a some time has elapsed, timers merely cause pump() to return
-after some time has elapsed.  Neither is reset/restarted automatically.
+sometimes it's nice to know that they're going a little slowly.
+Timeouts throw exceptions after a some time has elapsed, timers merely
+cause pump() to return after some time has elapsed.  Neither is
+reset/restarted automatically.
 
-Timeout objects are created by calling timeout( $interval ) and passing the
-result to run(), start() or harness().  The timeout period starts ticking just
-after all the child processes have been fork()ed or spawn()ed, and are polled
-for expiration in run(), pump() and finish().  If/when they expire, an
-exception is thrown.  This is typically useful to keep a subprocess from taking
-too long.
+Timeout objects are created by calling timeout( $interval ) and passing
+the result to run(), start() or harness().  The timeout period starts
+ticking just after all the child processes have been fork()ed or
+spawn()ed, and are polled for expiration in run(), pump() and finish().
+If/when they expire, an exception is thrown.  This is typically useful
+to keep a subprocess from taking too long.
 
-If a timeout occurs in run(), all child processes will be terminated and all
-file/pipe/ptty descriptors opened by run() will be closed.  File descriptors
-opened by the parent process and passed in to run() are not closed in this
-event.
+If a timeout occurs in run(), all child processes will be terminated and
+all file/pipe/ptty descriptors opened by run() will be closed.  File
+descriptors opened by the parent process and passed in to run() are not
+closed in this event.
 
-If a timeout occurs in pump(), pump_nb(), or finish(), it's up to you to decide
-whether to kill_kill() all the children or to implement some more graceful
-fallback.  No I/O will be closed in pump(), pump_nb() or finish() by such an
-exception (though I/O is often closed down in those routines during the natural
-course of events).
+If a timeout occurs in pump(), pump_nb(), or finish(), it's up to you to
+decide whether to kill_kill() all the children or to implement some more
+graceful fallback.  No I/O will be closed in pump(), pump_nb() or
+finish() by such an exception (though I/O is often closed down in those
+routines during the natural course of events).
 
-Often an exception is too harsh.  timer( $interval ) creates timer objects that
-merely prevent pump() from blocking forever.  This can be useful for detecting
-stalled I/O or printing a soothing message or "." to pacify an anxious user.
+Often an exception is too harsh.  timer( $interval ) creates timer
+objects that merely prevent pump() from blocking forever.  This can be
+useful for detecting stalled I/O or printing a soothing message or "."
+to pacify an anxious user.
 
-Timeouts and timers can both be restarted at any time using the timer's start()
-method (this is not the start() that launches subprocesses).  To restart a
-timer, you need to keep a reference to the timer:
+Timeouts and timers can both be restarted at any time using the timer's
+start() method (this is not the start() that launches subprocesses).  To
+restart a timer, you need to keep a reference to the timer:
 
    ## Start with a nice long timeout to let smbclient connect.  If
    ## pump or finish take too long, an exception will be thrown.
@@ -341,9 +347,10 @@ timer, you need to keep a reference to the timer:
    die $x ;
  }
 
-Timeouts and timers are I<not> checked once the subprocesses are shut down;
-they will not expire in the interval between the last valid process and when
-IPC::Run scoops up the processes' result codes, for instance.
+Timeouts and timers are I<not> checked once the subprocesses are shut
+down; they will not expire in the interval between the last valid
+process and when IPC::Run scoops up the processes' result codes, for
+instance.
 
 =head2 Spawning synchronization, child exception propogation
 
@@ -1006,7 +1013,7 @@ in their exit codes.
 
 =cut
 
-$VERSION = 0.7 ;
+$VERSION = 0.71 ;
 
 @ISA = qw( Exporter ) ;
 
