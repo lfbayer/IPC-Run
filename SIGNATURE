@@ -1,0 +1,62 @@
+This file contains message digests of all files listed in MANIFEST,
+signed via the Module::Signature module, version 0.44.
+
+To verify the content in this distribution, first make sure you have
+Module::Signature installed, then type:
+
+    % cpansign -v
+
+It will check each file's integrity, as well as the signature's
+validity.  If "==> Signature verified OK! <==" is not displayed,
+the distribution may already have been compromised, and you should
+not run its Makefile.PL or Build.PL.
+
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA1
+
+SHA1 f64f4b770fd71fe79635e7192017213bad50af30 Changes
+SHA1 07e39c16ee58858c09d83849b286ea66d725ae1d MANIFEST
+SHA1 dcd5a2e5e83f02e172b5bcee8407354097eff390 MANIFEST.SKIP
+SHA1 75c91254d55983f8807111b6e3e89282af1cf0e0 META.yml
+SHA1 a14ca773e75d19d2dd63efc526fcba8e51b84ff6 Makefile.PL
+SHA1 a02248670bc20319379ec21acafa5ed6f630f3a4 TODO
+SHA1 3f5928d86e3e9ced4e3829048ff7bc88db3af4a1 abuse/blocking_debug_with_sub_coprocess
+SHA1 ae81796545dfdada8c08f54b29b6029b3696a484 abuse/blocking_writes
+SHA1 32a5e706d5896d9550c9f9697f4b7166483a22c9 abuse/broken_pipe_on_bad_executable_name
+SHA1 4f65bb492723443dc7a591d44287f98bf055e2ed abuse/timers
+SHA1 185e5f15278360ccce479f09324070cb9da6ec4d eg/factorial
+SHA1 3b5fcda75e38cc479ea9a2f67b792ad94b2e6e43 eg/factorial_pipe
+SHA1 293d679cf505b74ea3cdea5a0bc7e9e813fa99f4 eg/factorial_scalar
+SHA1 c4ac5a17ab932365de1f2f575f51537e52394424 eg/run_daemon
+SHA1 d3d71aa1f3a2963d1e73226a65b5e944a9c7848b eg/runsh
+SHA1 4271e0cd68f05e236c476feaf4bff2b2bd384fe0 eg/runsu
+SHA1 67b31305d3a66c130ae9ae9df76653756446c734 eg/synopsis_scripting
+SHA1 70a83cdd91d800f4a5468c2fb25681ed6d8ca7e9 lib/IPC/Run.pm
+SHA1 9d007f1da1079b2c1dfab02ef4f755f5c273c8cf lib/IPC/Run/Debug.pm
+SHA1 ae905467946aa89a2759db0c93e30a90fda5545e lib/IPC/Run/IO.pm
+SHA1 6b087892de5beb960a086f6d7c8f492269d2ed1e lib/IPC/Run/Timer.pm
+SHA1 10384ca3c12239ac5dcfa692bb5aa5c01ab80cc8 lib/IPC/Run/Win32Helper.pm
+SHA1 50e8bee80d471e00562b6ebb0c689550587a88c7 lib/IPC/Run/Win32IO.pm
+SHA1 3d399d5bbc863c8e9aa294b9ee14815e4134714e lib/IPC/Run/Win32Pump.pm
+SHA1 89ea722df1a6a3031d4d3722473225c8effe56e2 t/adopt.t
+SHA1 803c7094802edc3e209bd6575355e9b1670b471b t/binmode.t
+SHA1 641d5980b7aa75259da849f68ef24412e81c1aba t/bogus.t
+SHA1 861f48c9fbb4de7b0ea7abe280095d5d57017999 t/filter.t
+SHA1 998fff1a7e23b71d18d1da7332117e7d95bb7666 t/harness.t
+SHA1 26c915e080a031d25bb2d243d1c337e52042ea84 t/io.t
+SHA1 9f8e441b3647dcccbbcb2e3f305d191218bbca13 t/kill_kill.t
+SHA1 1f450b197764ae2f849faf1859889e48169265b0 t/parallel.t
+SHA1 9a1aeb38b2933c629c1e4bbad9e13ee236328d52 t/pty.t
+SHA1 6c6aac8a786dcc48803ebcc55c4876831c5dc4fb t/pump.t
+SHA1 4e5c5b73d85cddc57b2b35661c66a521c9c4b8d2 t/run.t
+SHA1 c291dd88a7225d07534101d3777f92e88bd4fbfa t/signal.t
+SHA1 e0b19f800cfa4af30ea513772ae7ae4aeeeab18d t/timeout.t
+SHA1 52da9b5262a0b0b41abbda3ffc08177f798b40fc t/timer.t
+SHA1 9b44612e8a2bfdd33d92515944018e6dc59be232 t/win32_compile.t
+-----BEGIN PGP SIGNATURE-----
+Version: GnuPG v1.2.6 (Darwin)
+
+iD8DBQFB7vEZCV/r5CcpuVoRAtU4AJ4w9gYpkgBaz5+R7XZHbdnwOVKfOACfSOEk
+vXYPGCsnPYo7i9P0rTv2MLY=
+=nl2y
+-----END PGP SIGNATURE-----

@@ -92,7 +92,8 @@ my $err_file = 'run.t.err' ;
 
 my $h ;
 
-my $fd_map = _map_fds ;
+# initialized during the first test
+my $fd_map;
 
 sub slurp($) {
    my ( $f ) = @_ ;
@@ -156,6 +157,8 @@ my $r ;
 
 
 my @tests = (
+
+sub { ok( $fd_map = _map_fds ) },
 
 sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 
@@ -562,8 +565,8 @@ skip_unless_high_fds {
    $err = undef ;
    $fd_map = _map_fds ;
    $r = run(
-      [ @perl, '-le', 'open( STDIN, "<&3" ) or die $! ; print <STDIN>' ],
-      "3<", \"Hello World",
+      [ @perl, '-le', 'open( STDIN, "<&5" ) or die $! ; print <STDIN>' ],
+      "5<", \"Hello World",
       '>',  \$out,
       '2>', \$err,
    ) ;
@@ -620,6 +623,7 @@ sub { ok( $? ) },
 sub { ok( _map_fds, $fd_map ) },
 sub { eok( $out, ''  ) },
 #sub { ok( $err =~ /file descriptor/i ? "Bad file descriptor error" : $err, "Bad file descriptor error" ) },
+# XXX This should be use Errno; if $!{EBADF}. --rs
 sub { ok( length $err ? "Bad file descriptor error" : $err, "Bad file descriptor error" ) },
 
 ##

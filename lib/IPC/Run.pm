@@ -6,7 +6,7 @@ package IPC::Run ;
 # License or the Artistic License, as specified in the README file.
 #
 
-$VERSION = 0.78;
+$VERSION = 0.79;
 
 =head1 NAME
 
@@ -1343,7 +1343,8 @@ sub _read {
    confess 'undef' unless defined $_[0] ;
    my $s  = '' ;
    my $r = POSIX::read( $_[0], $s, 10_000 ) ;
-   croak "$!: read( $_[0] )" unless $r ;
+   croak "$!: read( $_[0] )" if not($r) and $! != POSIX::EINTR;
+   $r ||= 0;
    _debug "read( $_[0] ) = $r chars '$s'" if _debugging_data ;
    return $s ;
 }
@@ -2397,7 +2398,8 @@ sub _open_pipes {
 	       ## read() throws the bad file descriptor message if the
 	       ## kid dies on Win32.
                die $@ unless
-	          $@ =~ /^Input\/output error: read/
+	          $@ =~ /^Input\/output error: read/ ||
+		  ($@ =~ /input or output/ && $^O =~ /aix/) 
 		  || ( Win32_MODE && $@ =~ /Bad file descriptor/ ) ;
             }
 
@@ -3515,7 +3517,8 @@ sub results {
    &_assert_finished ;
    my IPC::Run $self = shift ;
 
-   return map $_->{RESULT} >> 8, @{$self->{KIDS}} ;
+   # we add 0 here to stop warnings associated with "unknown result, unknown PID"
+   return map { (0+$_->{RESULT}) >> 8 } @{$self->{KIDS}} ;
 }
 
 

@@ -240,7 +240,7 @@ This convenience function is a shortened spelling of
 
 If an exception is provided, it will be thrown when the timer notices that
 it has expired (in check()).  The name is for debugging usage, if you plan on
-having multiple timers around.  If no name is provided, an name like "timer #1"
+having multiple timers around.  If no name is provided, a name like "timer #1"
 will be provided.
 
 =cut

@@ -36,3 +36,5 @@ t/timeout.t
 t/timer.t
 t/win32_compile.t
 TODO
+SIGNATURE
+META.yml

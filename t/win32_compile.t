@@ -11,7 +11,7 @@ use strict ;
 use Test ;
 
 BEGIN {
-   unless ( eval "require 5.6.0" ) {
+   unless ( eval "require 5.006" ) {
        ## NOTE: I'm working around this here because I don't want this
        ## test to fail on non-Win32 systems with older Perls.  Makefile.PL
        ## does the require 5.6.0 to protect folks on Windows.

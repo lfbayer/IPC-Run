@@ -1,5 +1,15 @@
 Revision history for Perl extension IPC::Run
 
+0.79 Wed Jan 19 15:39:00 PST 2005
+   - New maintainer: Richard Soderberg <rsod@cpan.org>
+   - Resolved several RT tickets
+     - 4934, 8263, 8060, 8400, 8624, 5870, 4658, 8940, 1474, 4311
+   - Skip certain tests on AIX and OpenBSD as they deadlock otherwise
+   - Applied AIX patch from ActiveState (#8263)
+   - Fixed t/run.t on OS X (#8940)
+   - Add check for EINTR to _read (#5870)
+   - FreeBSD uses fds up to 4 by default, fixed tests to start at 5 (#8060)
+
 0.78 Tue Mar  9 01:49:25 EST 2004
    - Removed all psuedohashes
    - Require Win32::Process when on Win32 (<CORION a t cpan . org>)

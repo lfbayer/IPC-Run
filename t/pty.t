@@ -85,14 +85,14 @@ my $text = "hello world\n" ;
 ## Older Perls can't ok( a, qr// ), so I manually do that here.
 my $exp ;
 
-my $freebsd = $^O =~ /freebsd/ ? "freebsd deadlocks on this test" : "" ;
+my $platform_skip = $^O =~ /(?:aix|freebsd|openbsd)/ ? "$^O deadlocks on this test" : "" ;
 
 my @tests = (
 ##
 ## stdin only
 ##
 sub {
-   return skip $freebsd, 1 if $freebsd;
+   return skip $platform_skip, 1 if $platform_skip;
    $out = 'REPLACE ME' ;
    $? = 99 ;
    $fd_map = _map_fds ;
@@ -104,43 +104,43 @@ sub {
    ok( $out, "hello\n" ) ;
 },
 sub {
-   return skip $freebsd, 1 if $freebsd;
+   return skip $platform_skip, 1 if $platform_skip;
    $exp = qr/^HELLO\n(?!\n)$/ ;
    $err =~ $exp ? ok( 1 ) : ok( $err, $exp ) ;
 },
 sub {
-   return skip $freebsd, 1 if $freebsd;
+   return skip $platform_skip, 1 if $platform_skip;
    ok( $in, '' )
 },
 
 sub {
-   return skip $freebsd, 1 if $freebsd;
+   return skip $platform_skip, 1 if $platform_skip;
    $in  = "world\n" ;
    $? = 0 ;
    pump $h until $out =~ /world/ && $err =~ /WORLD/ ;
    ok( $out, "hello\nworld\n" ) ;
 },
 sub {
-   return skip $freebsd, 1 if $freebsd;
+   return skip $platform_skip, 1 if $platform_skip;
    $exp = qr/^HELLO\nWORLD\n(?!\n)$/ ;
    $err =~ $exp ? ok( 1 ) : ok( $err, $exp ) ;
 },
 sub {
-   return skip $freebsd, 1 if $freebsd;
+   return skip $platform_skip, 1 if $platform_skip;
    ok( $in, '' )
 },
 
 sub {
-   return skip $freebsd, 1 if $freebsd;
+   return skip $platform_skip, 1 if $platform_skip;
    $in = "quit\n" ;
    ok( $h->finish ) ;
 },
 sub {
-   return skip $freebsd, 1 if $freebsd;
+   return skip $platform_skip, 1 if $platform_skip;
    ok( ! $? )
 },
 sub {
-   return skip $freebsd, 1 if $freebsd;
+   return skip $platform_skip, 1 if $platform_skip;
    ok( _map_fds, $fd_map )
 },
 
@@ -253,12 +253,12 @@ sub { ok( _map_fds, $fd_map ) },
 
 plan tests => scalar @tests ;
 
-print "# Using IO::Tty $IO::Tty::VERSION\n";
-print "# Using IO::Pty $IO::Pty::VERSION\n";
-
 unless ( eval { require IO::Pty ; } ) {
    skip( "skip: IO::Pty not found", 0 ) for @tests ;
    exit ;
 }
+
+print "# Using IO::Tty $IO::Tty::VERSION\n";
+print "# Using IO::Pty $IO::Pty::VERSION\n";
 
 $_->() for ( @tests ) ;
