@@ -302,6 +302,95 @@ queue, and you'll often want to zap output queues to '' before pumping.
 The final call to finish() must be there: it allows the child process(es)
 to run to completion and waits for their exit values.
 
+=head1 OBSTINATE CHILDREN
+
+Interactive applications are usually optimized for human use.  This
+can help or hinder trying to interact with them through modules like
+IPC::Run.  Frequently, programs alter their behavior when they detect
+that stdin, stdout, or stderr are not connected to a tty, assuming that
+they are being run in batch mode.  Whether this helps or hurts depends
+on which optimizations change.  And there's often no way of telling
+what a program does in these areas other than trial and error and,
+occasionally, reading the source.  This includes different versions
+and implementations of the same program.
+
+All hope is not lost, however.  Most programs behave in reasonably
+tractable manners, once you figure out what it's trying to do.
+
+Here are some of the issues you might need to be aware of.
+
+=over
+
+=item *
+
+fflush()ing stdout and stderr
+
+This lets the user see stdout and stderr immediately.  Many programs
+undo this optimization if stdout is not a tty, making them harder to
+manage by things like IPC::Run.
+
+Many programs decline to fflush stdout or stderr if they do not
+detect a tty there.  Some ftp commands do this, for instance.
+
+If this happens to you, look for a way to force interactive behavior,
+like a command line switch or command.  If you can't, you will
+need to use a psuedo tty, and this is not yet provided by IPC::Run.
+
+Expect.pm and IO::Pty might be of assistance.
+
+=item *
+
+false prompts
+
+Interactive programs generally do not guarantee that output from user
+commands won't contain a prompt string.  For example, your shell prompt
+might be a '$', and a file named '$' might be the only file in a directory
+listing.
+
+This can make it hard to guarantee that your output parser won't be fooled
+into early termination of results.
+
+To help work around this, you can see if the program can alter it's 
+prompt, and use something you feel is never going to occur in actual
+practice.
+
+You should also look for your prompt to be the only thing on a line:
+
+   pump $h until $out =~ /^<SILLYPROMPT>\s?\z/m ;
+
+(use C<(?!\n)\Z> in place of C<\z> on older perls).
+
+You can also take the approach that IPC::ChildSafe takes and emit a
+command with known output after each 'real' command you issue, then
+look for this known output.
+
+=item *
+
+Refusing to accept input unless stdin is a tty.
+
+Some programs, for security reasons, will only accept certain types
+of input from a tty.  su, notable, will not prompt for a password unless
+it's connected to a tty.
+
+If this is your situation, use a psuedo terminal.
+
+=item *
+
+Not prompting unless connected to a tty.
+
+Some programs don't prompt unless stdin or stdout is a tty.  See if you can
+turn prompting back on.  If not, see if you can come up with a command that
+you can issue after every real command and look for it's output, as
+IPC::ChildSafe does.   There are two filters included with IPC::Run that
+can help with doing this.
+
+=item *
+
+Different output format when not connected to a tty.
+
+Some commands alter their formats to ease machine parsability when they
+aren't connected to a pipe.  This is actually good, but can be suprising.
+
 =head2 Redirection Operators
 
 =over
@@ -534,8 +623,13 @@ blessed in to the IPC::Run package, so you may make later calls to
 functions as members if you like:
 
    $h = harness( ... ) ;
-   start $h ;    # same as $h->start;
-   finish $h ;   # same as $h->finish ;
+   $h->start ;
+   $h->pump ;
+   $h->finish ;
+
+   $h = start( .... ) ;
+   $h->pump ;
+   ...
 
 Of course, using method call syntax lets you deal with any IPC::Run
 subclasses that might crop up, but don't hold your breath waiting for
@@ -563,7 +657,7 @@ use Fcntl ;
 use POSIX () ;
 use Symbol ;
 
-$VERSION = '0.2' ;
+$VERSION = '0.21' ;
 
 @ISA = qw( Exporter ) ;
 
@@ -617,7 +711,8 @@ sub _map_fds {
    my $digit = 0 ;
    my $in_use ;
    for my $fd (0..63) {
-      ## I'd like a quicker way to detect open file descriptors
+      ## I'd like a quicker way (less user, cpu & expecially sys and kernal
+      ## calls) to detect open file descriptors.  Let me know...
       my $test_fd = POSIX::dup( $fd ) ;
       $in_use = defined $test_fd ;
       POSIX::close $test_fd if $in_use ;
@@ -640,16 +735,16 @@ my $debug_fd = fileno STDERR ;
 ## Kids send to our select loop on this fd.
 my $recv_debug_fd ;
 
-sub debug {
-   my $self = shift ;
-   return unless $self->{debug} ;
+sub _debug {
+   return unless $debug ;
+
    my $s ;
    my $prefix = join(
       '',
       'harness',
       ( $$ eq $parent_pid ? () : ( '[', $$, ']' ) ),
       ': ',
-      ( $self->{debug} > 1 ? ( _map_fds, ' ' ) : () ),
+      ( $debug > 1 ? ( _map_fds, ' ' ) : () ),
    ) ;
 
    my $msg = join( '', map { defined $_ ? $_ : "<undef>" } @_ ) ;
@@ -662,16 +757,14 @@ sub debug {
 
 my @fd_descs = ( 'stdin', 'stdout', 'stderr' ) ;
 
-sub debug_fd {
-   my $self = shift ;
-   return unless $self->{debug} ;
+sub _debug_fd {
+   return unless $debug ;
 
    my $text = shift ;
    my $op = pop ;
    my $kid = $_[0] ;
 
-
-   $self->debug(
+   _debug(
       $text,
       ' ',
       ( defined $op->{FD}
@@ -691,7 +784,9 @@ sub debug_fd {
       ( defined $op->{KFD}
 	 ? $op->{KFD} < 3
 	    ? $fd_descs[$op->{KFD}]
-	    : $op->{KFD} == $recv_debug_fd
+	    : defined $kid
+	       && defined $kid->{DEBUG_FD}
+	       && $op->{KFD} == $kid->{DEBUG_FD}
 	       ? ( 'debug (', $op->{KFD}, ')' )
 	       : ( 'fd ', $op->{KFD} )
 	 : $op->{KFD}
@@ -701,22 +796,36 @@ sub debug_fd {
 }
 
 ##
-## Support routines
+## Support routines (NOT METHODS)
 ##
-
 my %cmd_cache ;
 
 sub _search_path {
-   my $self = shift ;
    my ( $cmd_name ) = @_ ;
    if ( File::Spec->file_name_is_absolute( $cmd_name ) ) {
-      $self->debug( "'", $cmd_name, "' is absolute" ) ;
+      _debug "'", $cmd_name, "' is absolute" ;
       return $cmd_name ;
    }
+
+   my $dirsep =
+      ( $^O =~ /^(?:MSWin32|dos|os2)$/
+         ? '[/\\\\]'
+      : $^O =~ /MacOS/
+         ? ':'
+      : $^O =~ /VMS/
+         ? '[\[\]]'
+      : '/'
+      ) ;
+
+   if ( $cmd_name =~ /($dirsep)/ ) {
+      _debug "'", $cmd_name, "' contains '", $1, "'" ;
+      return $cmd_name ;
+   }
+
    if ( exists $cmd_cache{$cmd_name} ) {
-      $self->debug( "'", $cmd_name, "' found in cache: '", $cmd_cache{$cmd_name}, "'");
+      _debug "'", $cmd_name, "' found in cache: '", $cmd_cache{$cmd_name}, "'" ;
       return $cmd_cache{$cmd_name} if -x $cmd_cache{$cmd_name} ;
-      $self->debug( "'", $cmd_cache{$cmd_name},"' no longer executable, searching...");
+      _debug "'", $cmd_cache{$cmd_name},"' no longer executable, searching..." ;
    }
 
    my @searched_in ;
@@ -751,7 +860,7 @@ sub _search_path {
          }
          for my $found ( @prospects ) {
             if ( -f $found && -x _ ) {
-	       $self->debug( 'found ', $found ) ;
+	       _debug 'found ', $found ;
 	       $cmd_cache{$cmd_name} = $found ;
 	       last LOOP ;
 	    }
@@ -759,7 +868,7 @@ sub _search_path {
       }
    }
    if ( exists $cmd_cache{$cmd_name} ) {
-      $self->debug( "'", $cmd_name, "' added to cache: '", $cmd_cache{$cmd_name}, "'");
+      _debug "'", $cmd_name, "' added to cache: '", $cmd_cache{$cmd_name}, "'" ;
       return $cmd_cache{$cmd_name} ;
    }
 
@@ -769,82 +878,71 @@ sub _search_path {
 
 sub _empty($) { ! ( defined $_[0] && length $_[0] ) }
 
-
-##
 ## 'safe' versions of otherwise fun things to do
-##
 sub _close {
-   my $self = shift ;
    confess 'undef' unless defined $_[0] ;
    no strict 'refs' ;
    my $fn = $_[0] =~ /^\d+$/ ? $_[0] : fileno $_[0] ;
    my $r = POSIX::close $_[0] ;
    $r = $r ? '' : " ERROR $!" ;
-   $self->debug( "close( $fn )$r" ) if $self->{debug} > 1 ;
+   _debug "close( $fn )$r" if $debug > 1 ;
 }
 
 sub _dup {
-   my $self = shift ;
    confess 'undef' unless defined $_[0] ;
    my $r = POSIX::dup( $_[0] ) ;
    croak "$!: dup( $_[0] )" unless defined $r ;
    $r = 0 if $r eq '0 but true' ;
-   $self->debug( "dup( $_[0] ) = $r" ) if $self->{debug} > 1 ;
+   _debug "dup( $_[0] ) = $r" if $debug > 1 ;
    return $r ;
 }
 
 
 sub _dup2 {
-   my $self = shift ;
    confess 'undef' unless defined $_[0] && defined $_[1] ;
    my $r = POSIX::dup2( $_[0], $_[1] ) ;
    croak "$!: dup2( $_[0], $_[1] )" unless defined $r ;
    $r = 0 if $r eq '0 but true' ;
-   $self->debug( "dup2( $_[0], $_[1] ) = $r" ) if $self->{debug} > 1 ;
+   _debug "dup2( $_[0], $_[1] ) = $r" if $debug > 1 ;
    return $r ;
 }
 
 sub _exec {
-   my $self = shift ;
    confess 'undef' unless defined $_[0] ;
    exec @_ or croak "$!: exec( " . join( ', ', @_ ) . " )" ;
 }
 
 sub _sysopen {
-   my $self = shift ;
    confess 'undef' unless defined $_[0] && defined $_[1] ;
    my $r = POSIX::open( $_[0], $_[1], 0644 ) ;
    croak "$!: open( $_[0], $_[1] )" unless defined $r ;
-   $self->debug( "open( $_[0], $_[1] ) = $r" ) if $self->{debug} > 1 ;
+   _debug "open( $_[0], $_[1] ) = $r" if $debug > 1 ;
    return $r ;
 }
 
 sub _pipe {
-   my $self = shift ;
    my ( $r, $w ) = POSIX::pipe ;
    croak "$!: pipe()" unless $r ;
-   $self->debug( "pipe() = ( $r, $w ) " ) if $self->{debug} > 1 ;
+   _debug "pipe() = ( $r, $w ) " if $debug > 1 ;
    return ( $r, $w ) ;
 }
 
 
 sub _read {
-   my $self = shift ;
    confess 'undef' unless defined $_[0] ;
    my $s  = '' ;
    my $r = POSIX::read( $_[0], $s, 100000 ) ;
    croak "$!: read( $_[0] )" unless $r ;
-   $self->debug( "read( $_[0] ) = '$s'" ) if $self->{debug} > 1 ;
+   _debug "read( $_[0] ) = '$s'" if $debug > 1 ;
    return $s ;
 }
 
 
 sub _write {
-   my $self = shift ;
    confess 'undef' unless defined $_[0] && defined $_[1] ;
    my $r = POSIX::write( $_[0], $_[1], length $_[1] ) ;
    croak "$!: write( $_[0], '$_[1]' )" unless $r ;
-   $self->debug( "write( $_[0], '$_[1]' ) = $r" ) if $self->{debug} > 1 ;
+   _debug "write( $_[0], '$_[1]' ) = $r" if $debug > 1 ;
    return $r ;
 }
 
@@ -861,8 +959,8 @@ You may think of C<run( ... )> as being like
 
    start( ... )->finish() ;
 
-if you like, though there is one subtle difference: run() does not
-empty input values.
+, though there is one subtle difference: run() does not
+set \$input_scalars to '' like finish() does.
 
 =cut
 
@@ -892,11 +990,12 @@ You may call run(), start() or pump() after calling harness()
 ## Notes: I've avoided handling a scalar that doesn't look like an
 ## opcode as a here document or as a filename, though I could DWIM
 ## those.  I'm not sure that the advantages outweight the danger when
-## the DWIMer guess wrong.
+## the DWIMer guesses wrong.
 ##
 sub harness {
    my $options = ref $_[-1] eq 'HASH' ? pop : {} ;
-   $options->{debug} = $debug || 0 unless defined $options->{debug} ;
+
+   local $debug = $options->{debug} if defined $options->{debug} ;
 
    my @args ;
 
@@ -931,7 +1030,7 @@ sub harness {
       },
       __PACKAGE__ ;
 
-   $self->debug( "** harnessing" ) ;
+   _debug "** harnessing" ;
 
    my $first_parse ;
    local $_ ;
@@ -939,8 +1038,7 @@ sub harness {
    while ( @args ) { for ( shift @args ) {
       eval {
          $first_parse = 1 ;
-$options->{debug} = 9 ;
-         $self-> debug(
+         _debug(
 	    "parsing ",
 	    defined $_
 	       ? ref $_ eq 'ARRAY'
@@ -952,7 +1050,7 @@ $options->{debug} = 9 ;
 			)
 		  )
 	       : '<undef>'
-	 ) if $options->{debug} > 1 ;
+	 ) if $debug > 1 ;
 
       REPARSE:
 	 if ( ref eq 'ARRAY' || ( ! $cur_kid && ref eq 'CODE' ) ) {
@@ -967,6 +1065,7 @@ $options->{debug} = 9 ;
 	    push @kids, $cur_kid ;
 	    $ops_required = 0 ;
 	 }
+	 
 	 elsif ( /^(\d*)>&(\d+)$/ ) {
 	    croak "No command before '$_'" unless $cur_kid ;
 	    push @{$cur_kid->{OPS}}, {
@@ -974,9 +1073,10 @@ $options->{debug} = 9 ;
 	       KFD1 => $2,
 	       KFD2 => length $1 ? $1 : 1,
 	    } ;
-	    $self->debug( "redirect tokens now required" ) ;
+	    _debug "redirect tokens now required" ;
 	    $ops_required = $first_parse ;
 	 }
+
 	 elsif ( /^(\d*)<&(\d+)$/ ) {
 	    croak "No command before '$_'" unless $cur_kid ;
 	    push @{$cur_kid->{OPS}}, {
@@ -986,6 +1086,7 @@ $options->{debug} = 9 ;
 	    } ;
 	    $ops_required = $first_parse ;
 	 }
+
 	 elsif ( /^(\d*)<&-$/ ) {
 	    croak "No command before '$_'" unless $cur_kid ;
 	    push @{$cur_kid->{OPS}}, {
@@ -994,6 +1095,7 @@ $options->{debug} = 9 ;
 	    } ;
 	    $ops_required = $first_parse ;
 	 }
+
 	 elsif ( /^(\d*)(<(?:\|<)?)(.*)$/ ) {
 	    croak "No command before '$_'" unless $cur_kid ;
 
@@ -1018,7 +1120,7 @@ $options->{debug} = 9 ;
 	       $pipe->{SOURCE} = shift @args ;
 	       croak "'$_' missing a source" if _empty $pipe->{SOURCE} ;
 
-	       $self->debug(
+	       _debug(
 		  'Kid ',
 		  $cur_kid->{NUM},
 		  "'s input fd ",
@@ -1089,6 +1191,7 @@ $options->{debug} = 9 ;
 	    } ;
 
 	 }
+
 	 elsif ( /^()   (>>?) (&)   (.*)$/x
 	    ||   /^()   (&)   (>\|>) ()$/x 
 	    ||   /^(\d*)()    (>\|>) ()$/x
@@ -1122,7 +1225,7 @@ $options->{debug} = 9 ;
 	       $pipe->{DEST} = shift @args ;
 	       croak "'$_' missing a destination" if _empty $pipe->{DEST} ;
 
-	       $self->debug(
+	       _debug(
 		  'Kid ',
 		  $cur_kid->{NUM},
 		  "'s output fd ",
@@ -1167,6 +1270,7 @@ $options->{debug} = 9 ;
 	       KFD2 => 2,
 	    } if $stderr_too ;
 	 }
+
 	 elsif ( /^\|$/ ) {
 	    croak "No command before '$_'" unless $cur_kid ;
 	    unshift @{$cur_kid->{OPS}}, {
@@ -1177,6 +1281,7 @@ $options->{debug} = 9 ;
             $assumed_fd = 1 ;
 	    $cur_kid = undef ;
 	 }
+
 	 elsif ( /^&$/ ) {
 	    croak "No command before '$_'" unless $cur_kid ;
 	    unshift @{$cur_kid->{OPS}}, {
@@ -1187,6 +1292,7 @@ $options->{debug} = 9 ;
             $assumed_fd = 0 ;
 	    $cur_kid = undef ;
 	 }
+
 	 elsif ( /^init$/ ) {
 	    croak "No command before '$_'" unless $cur_kid ;
 	    push @{$cur_kid->{OPS}}, {
@@ -1194,6 +1300,7 @@ $options->{debug} = 9 ;
 	       SUB  => shift @args,
 	    } ;
 	 }
+
 	 elsif ( ! $ops_required && $first_parse ) {
 	    ## It's not an opcode, and no explicit opcodes have been
 	    ## seen yet, so assume it's a file name.
@@ -1204,11 +1311,12 @@ $options->{debug} = 9 ;
 	    else {
 	       $_ = "$assumed_fd>",
 	    }
-	    $self->debug( "assuming '$_'" ) ;
+	    _debug "assuming '", $_, "'" ;
 	    ++$assumed_fd ;
 	    $first_parse = 0 ;
 	    goto REPARSE ;
 	 }
+
 	 else {
 	    croak join( 
 	       '',
@@ -1249,7 +1357,7 @@ sub _open_pipes {
    ## parent-side actions.
    for my $kid ( @{$self->{KIDS}} ) {
       unless ( ref $kid->{VAL} eq 'CODE' ) {
-	 $kid->{PATH} = $self->_search_path( $kid->{VAL}->[0] ) ;
+	 $kid->{PATH} = _search_path( $kid->{VAL}->[0] ) ;
       }
       if ( defined $pipe_read_fd ) {
 	 unshift @{$kid->{OPS}}, {
@@ -1265,7 +1373,7 @@ sub _open_pipes {
 	    if ( $op->{TYPE} eq '<' ) {
 	       for my $source ( $op->{SOURCE} ) {
 	          if ( ! ref $source ) {
-		     $self->debug(
+		     _debug(
 			"kid ",
 			$kid->{NUM},
 			" to read ",
@@ -1276,7 +1384,7 @@ sub _open_pipes {
 		     );
 		     croak "simulated open failure"
 			if $self->{_simulate_open_failure} ;
-		     $op->{TFD} = $self->_sysopen( $source, O_RDONLY ) ;
+		     $op->{TFD} = _sysopen( $source, O_RDONLY ) ;
 		     push @close_on_fail, $op->{TFD} ;
 		  }
 		  elsif ( isa( $source, 'GLOB' )
@@ -1286,7 +1394,7 @@ sub _open_pipes {
 		        "Unopened filehandle in input redirect for $op->{KFD}"
 		        unless defined fileno $source ;
 		     $op->{TFD} = fileno $source ;
-		     $self->debug(
+		     _debug(
 		        "kid ",
 			$kid->{NUM},
 			" to read ",
@@ -1296,7 +1404,7 @@ sub _open_pipes {
 		     ) ;
 		  }
 		  elsif ( isa( $source, 'SCALAR' ) ) {
-		     $self->debug(
+		     _debug(
 		        "kid ",
 			$kid->{NUM},
 			" to read ",
@@ -1304,17 +1412,17 @@ sub _open_pipes {
 			" from SCALAR"
 		     ) ;
 
-                     ( $op->{TFD}, $op->{FD} ) = $self->_pipe ;
+                     ( $op->{TFD}, $op->{FD} ) = _pipe ;
 		     push @close_on_fail, $op->{KFD}, $op->{FD} ;
 
 		     my $s = '' ;
 		     $op->{KIN_REF} = \$s ;
 		  }
 		  elsif ( isa( $source, 'CODE' ) ) {
-		     $self->debug(
+		     _debug(
 		        "kid $kid->{NUM} to read $op->{KFD} from CODE"
 		     ) ;
-		     ( $op->{TFD}, $op->{FD} ) = $self->_pipe ;
+		     ( $op->{TFD}, $op->{FD} ) = _pipe ;
 		     push @close_on_fail, $op->{KFD}, $op->{FD} ;
 		     my $s = '' ;
 		     $op->{KIN_REF} = \$s ;
@@ -1330,12 +1438,12 @@ sub _open_pipes {
 	       _init_filters( $op ) ;
 	    }
 	    elsif ( $op->{TYPE} eq '<|<' ) {
-	       $self->debug(
+	       _debug(
 		  'kid to read ',
 		  $op->{KFD},
 		  ' from a pipe harness() opens and returns',
 	       ) ;
-	       my ( $r, $w ) = $self->_pipe() ;
+	       my ( $r, $w ) = _pipe() ;
 	       open( $op->{SOURCE}, ">&=$w" )
 		  or croak "$! on write end of pipe" ;
 
@@ -1347,7 +1455,7 @@ sub _open_pipes {
 	       ## N> output redirection.
 	       my $dest = $op->{DEST} ;
 	       if ( ! ref $dest ) {
-		  $self->debug(
+		  _debug(
 		     "kid ",
 		     $kid->{NUM},
 		     " to write ",
@@ -1360,7 +1468,7 @@ sub _open_pipes {
 		  ) ;
 		  croak "simulated open failure"
 		     if $self->{_simulate_open_failure} ;
-		  $op->{TFD} = $self->_sysopen(
+		  $op->{TFD} = _sysopen(
 		     $dest,
 		     ( O_WRONLY
 		     | O_CREAT 
@@ -1377,7 +1485,7 @@ sub _open_pipes {
 		  ## existing output.
 		  my $old_fh = select( $dest ) ; $| = 1 ; select( $old_fh ) ;
 		  $op->{TFD} = fileno $dest ;
-		  $self->debug(
+		  _debug(
 		     'kid to write ',
 		     $op->{KFD},
 		     ' to handle ',
@@ -1385,21 +1493,21 @@ sub _open_pipes {
 		  ) ;
 	       }
 	       elsif ( isa( $dest, 'SCALAR' ) ) {
-		  $self->debug(
+		  _debug(
 		     "kid ",
 		     $kid->{NUM},
 		     " to write $op->{KFD} to SCALAR" ) ;
 
-		  ( $op->{FD}, $op->{TFD} ) = $self->_pipe ;
+		  ( $op->{FD}, $op->{TFD} ) = _pipe ;
 		  push @close_on_fail, $op->{FD}, $op->{TFD} ;
 
 		  $$dest = '' if $op->{TRUNC} ;
 	       }
 	       elsif ( isa( $dest, 'CODE' ) ) {
-		  $self->debug(
+		  _debug(
 		     "kid $kid->{NUM} to write $op->{KFD} to CODE"
 		  ) ;
-		  ( $op->{FD}, $op->{TFD} ) = $self->_pipe ;
+		  ( $op->{FD}, $op->{TFD} ) = _pipe ;
 		  push @close_on_fail, $op->{FD}, $op->{TFD} ;
 	       }
 	       else {
@@ -1415,14 +1523,14 @@ sub _open_pipes {
 	    elsif ( $op->{TYPE} eq '>|>' ) {
 	       ## N> output redirection to a pipe we open, but don't select()
 	       ## on.
-	       $self->debug(
+	       _debug(
 		  "kid ",
 		  $kid->{NUM},
 		  " to write ",
 		  $op->{KFD},
 		  ' to a pipe harness() returns'
 	       ) ;
-	       my ( $r, $w ) = $self->_pipe() ;
+	       my ( $r, $w ) = _pipe() ;
 	       open( $op->{DEST}, "<&=$r" )
 		  or croak "$! duping read end of pipe" ;
 	       $op->{DEST} = $w ;
@@ -1431,11 +1539,11 @@ sub _open_pipes {
 	       _init_filters( $op ) ;
 	    }
 	    elsif ( $op->{TYPE} eq '|' ) {
-	       $self->debug(
+	       _debug(
 	          "pipelining $kid->{NUM} and "
 	          . ( $kid->{NUM} + 1 )
 	       ) ;
-	       ( $pipe_read_fd, $op->{TFD} ) = $self->_pipe ;
+	       ( $pipe_read_fd, $op->{TFD} ) = _pipe ;
 	       @output_fds_accum = () ;
 	    }
 	    elsif ( $op->{TYPE} eq '&' ) {
@@ -1448,7 +1556,7 @@ sub _open_pipes {
    if ( @errs ) {
       for ( @close_on_fail ) {
          no strict 'refs' ;
-	 $self->_close( $_ ) ;
+	 _close( $_ ) ;
 	 $_ = undef ;
       }
       die join( '', @errs )
@@ -1460,7 +1568,7 @@ sub _open_pipes {
    for ( my $num = 0 ; $num < $#{$self->{KIDS}} ; ++$num ) {
       for ( reverse @output_fds_accum ) {
          next unless defined $_ ;
-	 $self->debug(
+	 _debug(
 	    'kid ',
 	    $self->{KIDS}->[$num]->{NUM},
 	    ' also to write ',
@@ -1477,9 +1585,9 @@ sub _open_pipes {
    $debug_fd = fileno STDERR ;
    $recv_debug_fd = undef ;
 
-   if ( $self->{debug} ) {
-      $self->debug( "creating debug pipe" ) ;
-      ( $recv_debug_fd, $w_debug_fd ) = $self->_pipe ;
+   if ( $debug ) {
+      _debug "creating debug pipe" ;
+      ( $recv_debug_fd, $w_debug_fd ) = _pipe ;
       for my $kid ( @{$self->{KIDS}} ) {
          ## We unshift this so it will be first in @files.  This makes the
 	 ## kids' debugging output get printed before ours does on a given
@@ -1508,7 +1616,16 @@ sub _open_pipes {
    for my $kid ( @{$self->{KIDS}} ) {
       for ( @{$kid->{OPS}} ) {
 	 if ( defined $_->{FD} ) {
-	    $self->debug( "kid $num\[$kid->{PID}]'s $_->{KFD} is my $_->{FD}" );
+	    _debug(
+	       'kid ',
+	       $num,
+	       '[',
+	       $kid->{PID},
+	       "]'s ",
+	       $_->{KFD},
+	       ' is my ',
+	       $_->{FD}
+	    );
 	    vec( $self->{ $_->{TYPE} eq '<' ? 'WIN' : 'RIN' }, $_->{FD}, 1 ) =1;
 	    if ( ! vec( $self->{EIN}, $_->{FD}, 1 ) ) {
 	       vec( $self->{EIN}, $_->{FD}, 1 ) = 1 ;
@@ -1533,8 +1650,8 @@ sub _open_pipes {
 
 	    vec( $self->{ROUT}, $pipe->{FD}, 1 ) = 0 ;
 
-	    $self->debug_fd( 'reading from ', $pipe ) ;
-	    my $in = $self->_read( $pipe->{FD} ) ;
+	    _debug_fd( 'reading from ', $pipe ) ;
+	    my $in = _read( $pipe->{FD} ) ;
 
 	    unless ( length $in ) {
 	       $self->_clobber( $pipe ) ;
@@ -1567,7 +1684,7 @@ sub _open_pipes {
 
 	    unless ( length $$in_ref ) {
 	       unless ( $self->{PAUSED} ) {
-		  $self->debug_fd( 'pausing', $pipe ) ;
+		  _debug_fd( 'pausing', $pipe ) ;
 		  vec( $self->{WIN}, $pipe->{FD}, 1 ) = 0 ;
 		  vec( $self->{EIN}, $pipe->{FD}, 1 ) = 0 ;
 		  vec( $self->{PIN}, $pipe->{FD}, 1 ) = 1 ;
@@ -1575,9 +1692,9 @@ sub _open_pipes {
 	       }
 	       return 0 ;
 	    }
-	    $self->debug_fd( 'writing to', $pipe ) ;
+	    _debug_fd( 'writing to', $pipe ) ;
 
-	    my $c = $self->_write( $pipe->{FD}, $$in_ref ) ;
+	    my $c = _write( $pipe->{FD}, $$in_ref ) ;
 	    substr( $$in_ref, 0, $c, '' ) ;
 	    return 1 ;
 	 } ;
@@ -1590,15 +1707,14 @@ sub _open_pipes {
 
 
 sub _dup2_gently {
-   my $self = shift ;
    my ( $files, $fd1, $fd2 ) = @_ ;
    ## Moves TFDs that are using the destination fd out of the
    ## way before calling _dup2
    for ( @$files ) {
       next unless defined $_->{TFD} ;
-      $_->{TFD} = $self->_dup( $_->{TFD} ) if $_->{TFD} == $fd2 ;
+      $_->{TFD} = _dup( $_->{TFD} ) if $_->{TFD} == $fd2 ;
    }
-   $self->_dup2( $fd1, $fd2 ) ;
+   _dup2( $fd1, $fd2 ) ;
 }
 
 
@@ -1619,7 +1735,7 @@ sub _do_kid {
       for ( @{$_->{OPS}} ) {
          for ( $_->{FD}, ( $_ != $kid ? $_->{TFD} : () ) ) {
 	    if ( defined $_ && ! $closed[$_] && ! $needed[$_] ) {
-	       $self->_close( $_ ) ;
+	       _close( $_ ) ;
 	       $closed[$_] = 1 ;
 	       $_ = undef ;
 	    }
@@ -1630,20 +1746,20 @@ sub _do_kid {
    for ( @{$kid->{OPS}} ) {
       if ( defined $_->{TFD} ) {
 	 unless ( $_->{TFD} == $_->{KFD} ) {
-	    $self->_dup2_gently( $kid->{OPS}, $_->{TFD}, $_->{KFD} ) ;
-	    $self->_close( $_->{TFD} ) ;
+	    _dup2_gently( $kid->{OPS}, $_->{TFD}, $_->{KFD} ) ;
+	    _close( $_->{TFD} ) ;
 	    $closed[$_->{TFD}] = 1 ;
 	    $_->{TFD} = undef ;
 	 }
       }
       elsif ( $_->{TYPE} eq 'dup' ) {
-	 $self->_dup2_gently( $kid->{OPS}, $_->{KFD1}, $_->{KFD2} )
+	 _dup2_gently( $kid->{OPS}, $_->{KFD1}, $_->{KFD2} )
 	    unless $_->{KFD1} == $_->{KFD2} ;
       }
       elsif ( $_->{TYPE} eq 'close' ) {
          for ( $_->{KFD} ) {
 	    if ( ! $closed[$_] ) {
-	       $self->_close( $_ ) ;
+	       _close( $_ ) ;
 	       $closed[$_] = 1 ;
 	       $_ = undef ;
 	    }
@@ -1660,9 +1776,9 @@ sub _do_kid {
    }
    else {
 $| = 1 ;
-      $self->debug( 'execing ', $kid->{PATH} ) ;
+      _debug 'execing ', $kid->{PATH} ;
       POSIX::close( $debug_fd ) if defined $debug_fd ;
-      $self->_exec( $kid->{PATH}, @{$kid->{VAL}}[1..$#{$kid->{VAL}}] ) ;
+      _exec( $kid->{PATH}, @{$kid->{VAL}}[1..$#{$kid->{VAL}}] ) ;
       croak "exec of $kid->{PATH} failed $!" ;
    }
 }
@@ -1690,7 +1806,7 @@ timeout().
 
 sub start {
    my $options = @_ > 1 && ref $_[-1] eq 'HASH' ? pop : {} ;
-   $options->{debug} = $debug || 0 unless defined $options->{debug} ;
+   local $debug = $options->{debug} if defined $options->{debug} ;
 
    my $self ;
    if ( @_ == 1 && isa( $_[0], __PACKAGE__ ) ) {
@@ -1701,7 +1817,7 @@ sub start {
       $self = harness( @_, $options ) ;
    }
 
-   $self->debug( "** starting" ) ;
+   _debug "** starting" ;
 
    ## Assume we're not being called from &run.  It will correct our
    ## assumption if need be.  This affects whether &_select_loop clears
@@ -1723,10 +1839,10 @@ sub start {
 	       $kid->{PID} = fork() ;
 	       $self->_do_kid( $kid ) unless $kid->{PID} ;
 	       croak "$! during fork" unless defined $kid->{PID} ;
-	       $self->debug( "fork() = $kid->{PID}" ) ;
+	       _debug "fork() = ", $kid->{PID} ;
 	    }
 	    else {
-	       $self->debug( 
+	       _debug( 
 		  'spawning ',
 		  join(
 		     ' ',
@@ -1770,7 +1886,7 @@ sub start {
 		  $kid->{PATH},
 		  @{$kid->{VAL}}[1..$#{$kid->{VAL}}]
 	       ) ;
-	       $self->debug( "spawn_with_handles() = $kid->{PID}" ) ;
+	       _debug "spawn_with_handles() = ", $kid->{PID} ;
 	    }
 	 } ;
 	 push @errs, $@ if $@ ;
@@ -1786,7 +1902,7 @@ sub start {
 	       && ! $_->{DONT_CLOSE}
 	       && ! $closed[$_->{TFD}]
 	    ) {
-	       $self->_close( $_->{TFD} ) ;
+	       _close( $_->{TFD} ) ;
 	       $closed[$_->{TFD}] = 1 ;
 	       $_->{TFD} = undef ;
 	    }
@@ -1810,12 +1926,12 @@ sub start {
 sub _clobber {
    my $self = shift ;
    my ( $file ) = @_ ;
-   $self->debug_fd( "closing", $file ) ;
+   _debug_fd( "closing", $file ) ;
    my $doomed = $file->{FD} ;
    vec( $self->{RIN}, $doomed, 1 ) = 0 ;
    vec( $self->{WIN}, $doomed, 1 ) = 0 ;
    vec( $self->{EIN}, $doomed, 1 ) = 0 ;
-   $self->_close( $doomed ) ;
+   _close( $doomed ) ;
    @{$self->{PIPES}} = grep { $_->{FD} ne $doomed } @{$self->{PIPES}} ;
    $file->{FD} = undef ;
 }
@@ -1852,7 +1968,7 @@ SELECT:
 	 my $did ;
 	 1 while ( $did = _do_filters( $file ) ) ;
 	 if ( defined $file->{FD} && ! defined( $did ) || $did ) {
-	    $self->debug_fd( "unpausing", $file ) ;
+	    _debug_fd( "unpausing", $file ) ;
 	    $file->{PAUSED} = 0 ;
 	    vec( $self->{WIN}, $file->{FD}, 1 ) = 1 ;
 	    vec( $self->{EIN}, $file->{FD}, 1 ) = 1 ;
@@ -1863,7 +1979,7 @@ SELECT:
 	 }
       }
 
-      if ( $self->{debug} > 1 ) {
+      if ( $debug > 1 ) {
          my $map = join(
 	    '',
 	    map {
@@ -1879,7 +1995,7 @@ SELECT:
 	    } (0..128)
 	 ) ;
 	 $map =~ s/((?:[a-z-]|\([^\)]*\)){12,}?)-*$/$1/ ;
-	 $self->debug(
+	 _debug(
 	    'selecting ',
 	    $map,
 	    ' with timeout=',
@@ -1900,7 +2016,7 @@ SELECT:
 
 
       croak "$! in select" if $nfound < 0 ;
-      if ( $self->{debug} ) {
+      if ( $debug ) {
          my $map = join(
 	    '',
 	    map {
@@ -1916,7 +2032,7 @@ SELECT:
 	    } (0..128)
 	 ) ;
 	 $map =~ s/((?:[a-z-]|\([^\)]*\)){12,}?)-*$/$1/ ;
-	 $self->debug( "selected  $map" ) ;
+	 _debug "selected  ", $map ;
       }
 
       ## Need to copy since _clobber alters @{$self->{PIPES}}.
@@ -1940,14 +2056,14 @@ SELECT:
 	       next FILE ;
 	    }
 
-	    $self->debug_fd( "filtering data from", $file ) ;
+	    _debug_fd( "filtering data from", $file ) ;
 	    $io_occurred = 1 if _do_filters( $file ) ;
 
 	    next FILE unless defined $file->{FD} ;
 	 }
 
 	 if ( vec( $self->{WOUT}, $file->{FD}, 1 ) ) {
-	    $self->debug_fd( "filtering data to", $file ) ;
+	    _debug_fd( "filtering data to", $file ) ;
 	    $io_occurred = 1 if _do_filters( $file ) ;
 
 	    next FILE unless defined $file->{FD} ;
@@ -1966,21 +2082,21 @@ SELECT:
 sub _cleanup {
    my $self = shift ;
    my $num = 0 ;
-   $self->debug( "cleaning up" ) ;
+   _debug "cleaning up" ;
    ## _clobber modified PIPES
    $self->_clobber( $self->{PIPES}->[0] ) while @{$self->{PIPES}} ;
    for my $kid ( @{$self->{KIDS}} ) {
       if ( ! length $kid->{PID} ) {
-	 $self->debug( 'never ran child ', $num++, ", can't reap" ) ;
+	 _debug 'never ran child ', $num++, ", can't reap" ;
 	 for my $op ( @{$kid->{OPS}} ) {
-	    $self->_close( $op->{TFD} ) if defined $op->{TFD} ;
+	    _close( $op->{TFD} ) if defined $op->{TFD} ;
 	 }
       }
       else {
-	 $self->debug( 'reaping child ', $num++, ' (pid ', $kid->{PID}, ')' ) ;
+	 _debug 'reaping child ', $num++, ' (pid ', $kid->{PID}, ')' ;
 	 my $pid = waitpid $kid->{PID}, 0 ;
 	 $kid->{RESULT} = $? ;
-	 $self->debug( 'reaped ', $pid, ', $?=', $kid->{RESULT} ) ;
+	 _debug 'reaped ', $pid, ', $?=', $kid->{RESULT} ;
       }
 
       if ( defined $kid->{DEBUG_FD} ) {
@@ -2047,8 +2163,9 @@ sub pump {
 
    my IPC::Run $self = shift ;
 
-   $self->{debug} = $debug unless defined $self->{debug} ;
-   $self->debug( "** pumping" ) ;
+   local $debug = $self->{debug} if defined $self->{debug} ;
+
+   _debug "** pumping" ;
 
    my $r = eval {
       $self->start if $self->{STATE} < _started ;
@@ -2058,7 +2175,7 @@ sub pump {
    } ;
    if ( $@ ) {
       my $x = $@ ;
-      $self->debug( $x ) if $x ;
+      _debug $x if $x ;
       eval { $self->_cleanup } ;
       warn $@ if $@ ;
       die $x ;
@@ -2080,6 +2197,9 @@ task in the foreground, but don't want to starve any child processes.
 
 sub pump_nb {
    my IPC::Run $self = shift ;
+
+   ## Remember to uncomment this if we add any debug()ing here
+#   local $debug = $self->{debug} if defined $self->{debug} ;
 
    $self->{non_blocking} = 1 ;
    my $r = eval { $self->pump } ;
@@ -2121,7 +2241,9 @@ sub finish {
    my $self = shift ;
    my $options = @_ && ref $_[-1] eq 'HASH' ? pop : {} ;
 
-   $self->debug( "** finishing" ) ;
+   local $debug = $self->{debug} if defined $self->{debug} ;
+
+   _debug "** finishing" ;
 
    eval {
       $self->{non_blocking} = 0 ;
@@ -2131,7 +2253,7 @@ sub finish {
       $self->_select_loop( $options ) if @{$self->{PIPES}} ;
    } ;
    my $x = $@ ;
-   $self->debug( $x ) if $x ;
+   _debug $x if $x ;
    eval { $self->_cleanup } ;
    warn $@ if $@ ;
    die $x if $x ;
@@ -2667,7 +2789,7 @@ These will be addressed as needed and as time allows.
 Stall timeout.
 
 Expose a list of child process objects.  When I do this,
-each child process is likely to be blessed into IPC::Run.
+each child process is likely to be blessed into IPC::Run::Proc.
 
 $kid->abort(), $kid->kill(), $kid->signal( $num_or_name ).
 

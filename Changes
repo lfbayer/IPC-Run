@@ -1,5 +1,11 @@
 Revision history for Perl extension IPC::Bashem.
 
+0.21 Fri Jun  2 12:49:08 EDT 2000
+   - Added some advice for dealing with obstinate children
+   - Converted many methods to plain subs for simplicity & performance
+   - Converted to using local $debug to control debugging status for
+     simplicity's sake.  Don't know about performance effects, since
+     dynamic scope lookups can be slow.
 
 0.2  Thu Jun  1 01:48:29 EDT 2000
    - Undid the creation of a pipe when passing a \*FOO or an IO::Handle
@@ -20,6 +26,8 @@ Revision history for Perl extension IPC::Bashem.
      start time at the end of a second
    - minor name changes to some field names to make the code marginally
      less obscure.
+   - Fixed the MakeMaker settings and the directory layout so "make install"
+     actually works.
 
 0.1  Tue Apr 25 22:10:07 2000
 

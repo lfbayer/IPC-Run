@@ -1,3 +1,5 @@
 CVS/.*
 \.sw[a-z]$
+\.tar(\.gz)?$
 Makefile
+mess/.*
