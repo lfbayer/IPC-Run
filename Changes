@@ -1,5 +1,11 @@
 Revision history for Perl extension IPC::Run
 
+0.74 Thu May 23 09:24:57 EDT 2002
+   - Skip a set of pty tests that deadlock on freebsd.  Reported and
+     investigated by Rocco Caputo <troc@pobox.com>.  perldoc t/pty.t
+     for details.
+
+0.73 Wed May 22 09:03:26 EDT 2002
    - Improved Win32 PATH and PATHEXT search; original patch by Ron Savage
      <ron@savage.net.au>
 
