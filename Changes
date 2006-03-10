@@ -1,5 +1,10 @@
 Revision history for Perl extension IPC::Run
 
+   - Applied documentation patch from RT.
+
+0.80
+   - Fixed documentation to work with '<' redirect
+
 0.79 Wed Jan 19 15:39:00 PST 2005
    - New maintainer: Richard Soderberg <rsod@cpan.org>
    - Resolved several RT tickets

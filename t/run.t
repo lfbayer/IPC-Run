@@ -6,6 +6,15 @@ run.t - Test suite for IPC::Run::run, etc.
 
 =cut
 
+BEGIN { 
+    if( $ENV{PERL_CORE} ) {
+        chdir '../lib/IPC/Run' if -d '../lib/IPC/Run';
+        unshift @INC, 'lib', '../..';
+        $^X = '../../../t/' . $^X;
+    }
+}
+
+
 ## Handy to have when our output is intermingled with debugging output sent
 ## to the debugging fd.
 $| = 1 ;
@@ -157,8 +166,6 @@ my $r ;
 
 
 my @tests = (
-
-sub { ok( $fd_map = _map_fds ) },
 
 sub { ok( _map_fds, $fd_map ) ; $fd_map = _map_fds },
 
@@ -565,6 +572,8 @@ skip_unless_high_fds {
    $err = undef ;
    $fd_map = _map_fds ;
    $r = run(
+      ## FreeBSD doesn't guarantee that fd 3 or 4 are available, so
+      ## don't assume, go for 5.
       [ @perl, '-le', 'open( STDIN, "<&5" ) or die $! ; print <STDIN>' ],
       "5<", \"Hello World",
       '>',  \$out,
@@ -1054,5 +1063,11 @@ sub { eok( $err,    uc( $text ) ) },
 ) ;
 
 plan tests => scalar @tests, todo => [ 69 ] ;
+
+# Must do this this late as plan uses localtime, and localtime on darwin opens
+# a file descriptor. Quite probably other operating systems do file descriptor
+# things during the test setup.
+
+$fd_map = _map_fds ;
 
 $_->() for ( @tests ) ;

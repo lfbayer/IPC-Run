@@ -6,6 +6,15 @@ kill_kill.t - Test suite IPC::Run->kill_kill
 
 =cut
 
+BEGIN { 
+    if( $ENV{PERL_CORE} ) {
+        chdir '../lib/IPC/Run' if -d '../lib/IPC/Run';
+        unshift @INC, 'lib', '../..';
+        $^X = '../../../t/' . $^X;
+    }
+}
+
+
 use strict ;
 
 use Test ;

@@ -6,6 +6,14 @@ io.t - Test suite excercising IPC::Run::IO with IPC::Run::run.
 
 =cut
 
+BEGIN { 
+    if( $ENV{PERL_CORE} ) {
+        chdir '../lib/IPC/Run' if -d '../lib/IPC/Run';
+        unshift @INC, 'lib', '../..';
+        $^X = '../../../t/' . $^X;
+    }
+}
+
 use strict ;
 
 use Test ;

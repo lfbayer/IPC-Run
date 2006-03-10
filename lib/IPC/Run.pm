@@ -6,7 +6,7 @@ package IPC::Run ;
 # License or the Artistic License, as specified in the README file.
 #
 
-$VERSION = 0.79;
+$VERSION = "0.80_91";
 
 =head1 NAME
 
@@ -23,8 +23,8 @@ IPC::Run - system() and background procs w/ piping, redirs, ptys (Unix, Win32)
       run \@cmd, \$in, \$out, \$err, timeout( 10 ) or die "cat: $?"
 
       # Can do I/O to sub refs and filenames, too:
-      run \@cmd, "in.txt", \&out, \&err or die "cat: $?"
-      run \@cat, "in.txt", '>>', "out.txt", '2>>', "err.txt" ;
+      run \@cmd, '<', "in.txt", \&out, \&err or die "cat: $?"
+      run \@cat, '<', "in.txt", '>>', "out.txt", '2>>', "err.txt" ;
 
 
       # Redirecting using psuedo-terminals instad of pipes.

@@ -2,7 +2,7 @@ package IPC::Run::IO ;
 
 =head1 NAME
 
-   IPC::Run::IO -- I/O channels for IPC::Run.
+IPC::Run::IO -- I/O channels for IPC::Run.
 
 =head1 SYNOPSIS
 

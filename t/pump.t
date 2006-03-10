@@ -6,6 +6,14 @@ pump.t - Test suite for IPC::Run::run, etc.
 
 =cut
 
+BEGIN { 
+    if( $ENV{PERL_CORE} ) {
+        chdir '../lib/IPC/Run' if -d '../lib/IPC/Run';
+        unshift @INC, 'lib', '../..';
+        $^X = '../../../t/' . $^X;
+    }
+}
+
 use strict ;
 
 use Test ;
