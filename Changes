@@ -1,8 +1,13 @@
 Revision history for Perl extension IPC::Run
 
-   - Applied documentation patch from RT.
 
 0.80
+   - IPC::Run::IO now retries on certain "temporarily unavailable" errors.
+     This should fix several reported issues with t/run.t, test 69.
+
+     Many thanks to < Eric (at) Scratch Computing (.com) > for the patch!
+
+   - Applied documentation patch from RT.
    - Fixed documentation to work with '<' redirect
 
 0.79 Wed Jan 19 15:39:00 PST 2005
