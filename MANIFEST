@@ -46,3 +46,4 @@ t/win32_compile.t
 t/utf8.t
 TODO
 META.yml                                 Module meta-data (added by MakeMaker)
+META.json                                Module meta-data (added by MakeMaker)
