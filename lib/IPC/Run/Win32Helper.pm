@@ -37,7 +37,7 @@ BEGIN {
 require POSIX;
 
 use Text::ParseWords;
-use Win32::Process;
+use Win32::Process 'NORMAL_PRIORITY_CLASS';
 use IPC::Run::Debug;
 use Win32API::File qw(
    FdGetOsFHandle
