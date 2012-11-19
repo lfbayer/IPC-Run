@@ -18,9 +18,12 @@ is( $unicode_string, Encode::decode_utf8($byte_string), "byte string and unicode
 my $bytes_out;
 
 ## Test using the byte string: "cat" should be transparent.
-IPC::Run::run( ["cat"], \$byte_string, \$bytes_out );
+my $command = [ $^O eq 'MSWin32' ? ($^X, '-pe0')  : 'cat' ];
+IPC::Run::run( $command, \$byte_string, \$bytes_out );
 is( $bytes_out, $byte_string, "run() w/ byte string" );
 
+$bytes_out = undef;
+
 ##  Same test using the Unicode string
-IPC::Run::run( ["cat"], \$unicode_string, \$bytes_out );
+IPC::Run::run( $command, \$unicode_string, \$bytes_out );
 is( Encode::decode_utf8($bytes_out), $unicode_string, "run() w/ unicode string" );
