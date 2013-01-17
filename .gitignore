@@ -9,3 +9,5 @@
 /MYMETA.yml
 *.orig
 *.rej
+/run.t.out
+/MANIFEST.bak
